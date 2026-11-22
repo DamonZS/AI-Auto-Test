@@ -638,3 +638,10 @@ coding agent 提交代码变更
 - 可选 Chroma 使用每租户 collection 和租户、项目元数据过滤。启用的 worker 领取 UI 任务时可取得已录入的项目需求，为自然语言 UI 执行检索相关片段。SQLite 保存原始需求，索引可重建。
 - Linux 服务端以 Compose 发布。桌面目标为 Windows x64 安装程序和 macOS arm64 DMG，包含 Go 服务、Vue 工作台、Python worker 与 Chromium。程序和用户数据分离。平台构建及首次安装流程见 `docs/deployment/README.md`。
 - 干净环境发布验收发现历史 LangGraph 入口在包导入时即初始化模型。现按需加载旧入口，确定性 worker 启动可不提供模型密钥。回归测试在独立进程关闭 dotenv 并清除模型凭据。
+
+### 发布验收
+
+- 发布源提交 `201e08f093ce778c4b6cc3027e383e5e158b5034` 的 GitHub Actions 运行 `45079266280` 三项通过。Linux 验证 Go/Web 与 worker 的 Compose 启动、真实 Chromium 执行及重启后的结果持久化。Windows x64 验证安装、正常领取和完成任务、停机及卸载。macOS arm64 验证 DMG 构建、挂载及从安装副本执行相同任务。生产托管站点尚未配置。
+- 本地验证包括 Go 56 项、Python 无模型密钥回归 102 项、Chroma 专项 5 项、Vue 生产构建、Microsoft Edge 复杂表单真实回放。Python 回归中的 5 项跳过包括 4 项已在独立 Chroma 环境通过的用例，以及 1 项需显式配置外部站点工作簿的用例。
+- 交付产物为 Windows x64 EXE、macOS arm64 DMG 和 Linux amd64 容器归档。桌面交付当前适用内部验收，Windows 签名及 macOS 公证待正式发布配置。首次启动及旧库迁移流程见 `docs/deployment/README.md`。
+- 待接入项包括实际 coding agent 客户端的 Sampling 联调、ego 和 JEV 增强档、工作台直接启动录制、逐步截图、旧工作簿兼容、企业产物的模型生成和更完整的白盒执行。各项以独立实测证据更新状态。
