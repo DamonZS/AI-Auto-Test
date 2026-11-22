@@ -1,13 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 export AUTOTEST_PORT=39181
-compose=(docker compose -p "autotest-smoke-$$" -f deploy/compose.yaml)
+compose=(docker compose -p "autotest-smoke-$$" -f deploy/compose.yaml --profile worker)
 scratch="$(mktemp -d)"
 cleanup() {
     rm -f -- "$scratch/worker-token"
     rmdir -- "$scratch"
-    if [[ $1 != 0 ]]; then "${compose[@]}" logs --tail 40 || true; fi
-    "${compose[@]}" --profile worker down --volumes || true
+    if [[ $1 != 0 ]]; then
+        "${compose[@]}" ps -a || true
+        "${compose[@]}" logs --tail 60 control worker || true
+    fi
+    "${compose[@]}" down --volumes || true
 }
 trap 'cleanup $?' EXIT
 
@@ -26,7 +29,8 @@ export PLATFORM_WORKER_TOKEN
 rm -- "$scratch/worker-token"
 "${compose[@]}" up -d --no-build worker
 unset PLATFORM_WORKER_TOKEN
+"${compose[@]}" exec -T worker python -c 'import http.client, os; connection = http.client.HTTPConnection("control", 8090, timeout=10); connection.request("GET", "/api/agent/settings", headers={"Authorization": "Bearer " + os.environ["PLATFORM_WORKER_TOKEN"]}); status = connection.getresponse().status; print("Worker settings HTTP", status); raise SystemExit(status != 200)'
 python3 deploy/smoke.py "$server" check "$tenant" "$run"
-"${compose[@]}" --profile worker down
+"${compose[@]}" down
 "${compose[@]}" up -d --no-build --wait control
 python3 deploy/smoke.py "$server" check "$tenant" "$run"
