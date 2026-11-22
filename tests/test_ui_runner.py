@@ -1,5 +1,8 @@
 import asyncio
 import importlib.util
+import json
+import os
+import subprocess
 import sys
 import types
 import unittest
@@ -10,6 +13,16 @@ from unittest.mock import AsyncMock, patch
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+def test_worker_import_without_model_credentials():
+    environment = os.environ.copy()
+    environment["PYTHON_DOTENV_DISABLED"] = "1"
+    for credential in ("OPENAI_API_KEY", "OPENAI_ADMIN_KEY"):
+        environment.pop(credential, None)
+    launch = "import sys; sys.path.extend(" + json.dumps(sys.path) + "); "
+    launch += "from agents.ui_runner import execute_task; assert 'auto_ai.agent' not in sys.modules"
+    subprocess.run([sys.executable, "-c", launch], cwd=ROOT, env=environment, check=True, timeout=30)
 
 
 class Tool:

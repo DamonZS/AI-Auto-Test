@@ -637,3 +637,4 @@ coding agent 提交代码变更
 - 版本页支持导入 Go coverprofile 与 Cobertura 白盒覆盖率，仅保存汇总计数。日报和正式报告在提审时一并冻结覆盖率。完整白盒执行范围仍需确定。
 - 可选 Chroma 使用每租户 collection 和租户、项目元数据过滤。启用的 worker 领取 UI 任务时可取得已录入的项目需求，为自然语言 UI 执行检索相关片段。SQLite 保存原始需求，索引可重建。
 - Linux 服务端以 Compose 发布。桌面目标为 Windows x64 安装程序和 macOS arm64 DMG，包含 Go 服务、Vue 工作台、Python worker 与 Chromium。程序和用户数据分离。平台构建及首次安装流程见 `docs/deployment/README.md`。
+- 干净环境发布验收发现历史 LangGraph 入口在包导入时即初始化模型。现按需加载旧入口，确定性 worker 启动可不提供模型密钥。回归测试在独立进程关闭 dotenv 并清除模型凭据。
