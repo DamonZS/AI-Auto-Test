@@ -77,6 +77,8 @@ unset PLATFORM_AUTH_USERNAME PLATFORM_AUTH_PASSWORD
 
 ## 验证与数据
 
+- Playwright worker 默认使用 Chromium。可设置 `PLATFORM_BROWSER=chrome` 或 `PLATFORM_BROWSER=msedge` 使用执行机上已安装的对应浏览器，也可设置 `firefox` 或 `webkit`，并在同一 Python 环境安装对应的 Playwright 浏览器。使用多个执行进程时为每个进程设置所需浏览器。
+
 - Windows 使用 PowerShell 7 执行 `./packaging/smoke_windows.ps1 -Installer artifacts/Auto-Test-windows-x64-setup.exe`。macOS 执行 `bash packaging/smoke_macos.sh artifacts/Auto-Test-macos-arm64.dmg`。Linux 执行 `bash deploy/smoke_compose.sh`。
 - 冒烟只使用临时账号、独立数据库和合成结构化 UI 用例，检查正式认证、Vue 渲染、Chromium 实际断言和 worker 回报。真实模型凭据只在运行时设置。
 - 安装包自带 Python 和 Chromium。桌面监听 `127.0.0.1:8090`，数据库、主密钥、日志和截图位于用户数据目录。启动器通过 `PLATFORM_WORKER_CACHE_DIR` 将探索快照写入用户数据目录下的 `cache/`。Compose worker 将缓存写入 `worker-data` 卷的 `/state/cache`。

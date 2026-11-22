@@ -1,6 +1,7 @@
 """Playwright 浏览器管理 + 原子操作 + API 追踪"""
 
 import asyncio
+import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -127,8 +128,18 @@ class BrowserSession:
 
     async def start(self):
         """启动浏览器"""
+        browser_name = os.environ.get("PLATFORM_BROWSER", "chromium").strip().lower()
+        if browser_name not in {"chromium", "firefox", "webkit", "chrome", "msedge"}:
+            raise ValueError(f"不支持的 Playwright 浏览器：{browser_name}")
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=self.headless)
+        try:
+            if browser_name in {"chrome", "msedge"}:
+                self._browser = await self._playwright.chromium.launch(headless=self.headless, channel=browser_name)
+            else:
+                self._browser = await getattr(self._playwright, browser_name).launch(headless=self.headless)
+        except Exception:
+            await self._playwright.stop()
+            raise
         self._context = await self._browser.new_context(
             viewport={"width": 1280, "height": 720}
         )
