@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -11,20 +12,36 @@ import (
 )
 
 type Server struct {
-	st *store.Store
+	st         *store.Store
+	legacyAuth bool
 }
 
-func New(st *store.Store) *Server { return &Server{st: st} }
+type AuthOptions struct {
+	InsecureDevAuth bool
+}
+
+func New(st *store.Store, options ...AuthOptions) *Server {
+	legacyAuth := os.Getenv("PLATFORM_INSECURE_DEV_AUTH") == "1"
+	if len(options) != 0 {
+		legacyAuth = options[0].InsecureDevAuth
+	}
+	return &Server{st: st, legacyAuth: legacyAuth}
+}
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/tenants", s.createTenant)
-	mux.HandleFunc("GET /api/tenants", s.listTenants)
+	mux.HandleFunc("POST /api/auth/login", s.login)
+	mux.HandleFunc("POST /api/auth/logout", s.webSession(s.logout))
+	mux.HandleFunc("GET /api/auth/service-tokens", s.member(s.listServiceTokens, true))
+	mux.HandleFunc("POST /api/auth/service-tokens", s.member(s.issueServiceToken, true))
+	mux.HandleFunc("DELETE /api/auth/service-tokens/{id}", s.member(s.revokeServiceToken, true))
+	mux.HandleFunc("POST /api/tenants", s.workspaceAccount(s.createTenant))
+	mux.HandleFunc("GET /api/tenants", s.workspaceAccount(s.listTenants))
 	mux.HandleFunc("GET /api/overview", s.tenant(s.overview))
 	mux.HandleFunc("GET /api/settings", s.tenant(s.getSettings))
-	mux.HandleFunc("PUT /api/settings", s.tenant(s.putSettings))
+	mux.HandleFunc("PUT /api/settings", s.owner(s.putSettings))
 	mux.HandleFunc("GET /api/agent/settings", s.agent(s.getAgentSettings))
-	mux.HandleFunc("POST /mcp", s.agent(s.mcpEndpoint))
+	mux.HandleFunc("POST /mcp", s.service(scopeMCP, s.mcpEndpoint))
 
 	mux.HandleFunc("GET /api/projects", s.tenant(s.listProjects))
 	mux.HandleFunc("POST /api/projects", s.tenant(s.createProject))
@@ -42,6 +59,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/cases", s.tenant(s.createCase))
 	mux.HandleFunc("GET /api/suites", s.tenant(s.listSuites))
 	mux.HandleFunc("POST /api/suites", s.tenant(s.createSuite))
+	mux.HandleFunc("PATCH /api/suites/{id}", s.tenant(s.updateSuiteConcurrency))
 	mux.HandleFunc("POST /api/suites/{id}/run", s.tenant(s.runSuite))
 	mux.HandleFunc("GET /api/suites/{id}/runs", s.tenant(s.listSuiteRuns))
 	mux.HandleFunc("GET /api/suites/{id}/schedule", s.tenant(s.getSuiteSchedule))
@@ -73,17 +91,20 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/bugs/{id}/transition", s.tenant(s.transitionBug))
 
 	mux.HandleFunc("GET /api/patches", s.tenant(s.listPatches))
-	mux.HandleFunc("POST /api/patches/{id}/decide", s.tenant(s.decidePatch))
+	mux.HandleFunc("POST /api/patches/{id}/decide", s.owner(s.decidePatch))
 
 	mux.HandleFunc("GET /api/trends", s.tenant(s.trends))
+	s.registerWorkbench(mux)
+	s.registerCoverage(mux)
 	return cors(mux)
 }
 
 func cors(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Tenant-Id, X-Agent-Token")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tenant-Id, X-Agent-Token, Mcp-Session-Id, MCP-Protocol-Version")
+		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

@@ -1,0 +1,89 @@
+openapi: 3.0.3
+info:
+  title: 版本白盒覆盖率
+  version: 1.0.0
+security:
+  - Workspace: []
+paths:
+  /api/versions/{id}/coverage:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: 当前租户内的版本 ID，项目由该版本确定
+        schema: { type: string }
+    get:
+      summary: 获取版本的覆盖率汇总，每种格式最多一条
+      responses:
+        '200':
+          description: 按格式名排序的汇总。尚无导入时返回空数组
+          content:
+            application/json:
+              schema: { type: array, maxItems: 2, items: { $ref: '#/components/schemas/Snapshot' } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+    post:
+      summary: 导入覆盖率证据并替换同版本、同格式的上一次汇总
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [format, content]
+              properties:
+                format: { type: string, enum: [go-coverprofile, cobertura] }
+                content:
+                  type: string
+                  minLength: 1
+                  description: UTF-8 覆盖率报告文本，最多 1 MiB，请求体最多 2 MiB
+      responses:
+        '200':
+          description: 导入后的汇总
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Snapshot' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    Workspace:
+      type: http
+      scheme: bearer
+      description: 使用现有工作区会话与租户选择规则
+  responses:
+    Error:
+      description: 请求、认证、租户、报告格式或存储错误
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { type: string }
+  schemas:
+    Counts:
+      type: object
+      required: [covered, total]
+      properties:
+        covered: { type: integer, format: int64, minimum: 0 }
+        total: { type: integer, format: int64, minimum: 0 }
+    Snapshot:
+      type: object
+      required: [project_id, version_id, format]
+      properties:
+        project_id: { type: string }
+        version_id: { type: string }
+        format: { type: string, enum: [go-coverprofile, cobertura] }
+        statements: { $ref: '#/components/schemas/Counts' }
+        lines: { $ref: '#/components/schemas/Counts' }
+        branches: { $ref: '#/components/schemas/Counts' }
+      description: Go 返回 statements，Cobertura 返回 lines 和 branches。分母为零时不计算覆盖率。

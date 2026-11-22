@@ -133,12 +133,26 @@ func (s *Server) createCase(w http.ResponseWriter, r *http.Request, tid string) 
 	if b.GenerationMode == "" {
 		b.GenerationMode = "manual"
 	}
+	var belongs bool
+	err := s.st.DB.QueryRowContext(r.Context(), `SELECT EXISTS (
+		SELECT 1 FROM projects p WHERE p.id = ? AND p.tenant_id = ?
+		AND (? = '' OR EXISTS (SELECT 1 FROM environments e WHERE e.id = ? AND e.project_id = p.id AND e.tenant_id = p.tenant_id))
+		AND (? = '' OR EXISTS (SELECT 1 FROM requirements q WHERE q.id = ? AND q.project_id = p.id AND q.tenant_id = p.tenant_id))
+	)`, b.ProjectID, tid, b.EnvironmentID, b.EnvironmentID, b.RequirementID, b.RequirementID).Scan(&belongs)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法检查用例关联")
+		return
+	}
+	if !belongs {
+		fail(w, http.StatusBadRequest, "项目、需求或测试环境不存在或不属于当前项目")
+		return
+	}
 	if err := s.validateDataBinding(tid, b.ProjectID, b.DatasetID, b.DataRowID); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	cid := id()
-	_, err := s.st.DB.Exec(`INSERT INTO cases
+	_, err = s.st.DB.Exec(`INSERT INTO cases
 		(id, tenant_id, project_id, environment_id, requirement_id, name, type, scenario, expected_source, generation_mode, dataset_id, data_row_id)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		cid, tid, b.ProjectID, b.EnvironmentID, b.RequirementID, b.Name, b.Type, b.Scenario, b.ExpectedSource, b.GenerationMode, b.DatasetID, b.DataRowID)

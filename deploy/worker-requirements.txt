@@ -1,0 +1,6 @@
+deepagents==0.7.41
+langchain-openai==1.8.5
+playwright==1.56.0
+httpx==0.28.1
+python-dotenv==1.2.1
+neo4j==5.28.2

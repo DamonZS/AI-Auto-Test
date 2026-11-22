@@ -1,26 +1,53 @@
-const KEY = 'platform.tenant'
+let sessionToken = ''
+let tenantId = ''
+let onSessionExpired = () => {}
 
-export const getTenant = () => localStorage.getItem(KEY) || ''
-export const setTenant = (id) => localStorage.setItem(KEY, id)
+export const setTenant = (id) => { tenantId = id }
+export const setSessionExpiredHandler = (handler) => { onSessionExpired = handler }
 
-async function request(path, options = {}) {
+function clearSession() {
+  sessionToken = ''
+  tenantId = ''
+}
+
+async function request(path, options = {}, authenticated = true, download = false) {
+  const token = authenticated ? sessionToken : ''
   const res = await fetch(path, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'X-Tenant-Id': getTenant(),
+      ...(token && { Authorization: `Bearer ${token}` }),
+      ...(token && tenantId && { 'X-Tenant-Id': tenantId }),
       ...options.headers,
     },
   })
+  if (res.status === 401 && token && token === sessionToken) {
+    clearSession()
+    onSessionExpired()
+  }
   if (!res.ok) {
     const body = await res.text()
-    throw new Error(body.slice(0, 200) || res.statusText)
+    let detail
+    try { detail = JSON.parse(body) } catch { detail = null }
+    throw Object.assign(new Error(detail?.error || body.slice(0, 200) || res.statusText), { detail })
   }
-  return res.json()
+  if (download) return res.blob()
+  return res.status === 204 ? undefined : res.json()
 }
 
 export const api = {
+  async login(credentials) {
+    const { token } = await request('/api/auth/login', {
+      method: 'POST', body: JSON.stringify(credentials),
+    }, false)
+    sessionToken = token
+  },
+  async logout() {
+    await request('/api/auth/logout', { method: 'POST' })
+    clearSession()
+  },
   get: (path) => request(path),
+  download: (path) => request(path, {}, true, true),
   post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
   patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) }),
   put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),

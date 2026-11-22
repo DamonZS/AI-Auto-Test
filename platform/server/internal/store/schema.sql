@@ -5,6 +5,34 @@ CREATE TABLE IF NOT EXISTS tenants (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS auth_identities (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  password_salt BLOB NOT NULL,
+  password_hash BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tenant_memberships (
+  identity_id TEXT NOT NULL REFERENCES auth_identities(id) ON DELETE CASCADE,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'viewer')),
+  PRIMARY KEY (identity_id, tenant_id)
+);
+
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  id TEXT PRIMARY KEY,
+  token_hash BLOB NOT NULL UNIQUE,
+  scope TEXT NOT NULL CHECK (scope IN ('web', 'worker', 'mcp')),
+  identity_id TEXT REFERENCES auth_identities(id) ON DELETE CASCADE,
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL,
+  CHECK ((scope = 'web' AND identity_id IS NOT NULL AND tenant_id IS NULL)
+         OR (scope IN ('worker', 'mcp') AND identity_id IS NULL AND tenant_id IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS auth_tokens_identity ON auth_tokens(identity_id);
+CREATE INDEX IF NOT EXISTS auth_tokens_tenant ON auth_tokens(tenant_id);
+
 CREATE TABLE IF NOT EXISTS tenant_settings (
   tenant_id TEXT PRIMARY KEY,
   provider TEXT NOT NULL DEFAULT 'openai-compatible',
@@ -132,13 +160,15 @@ CREATE TABLE IF NOT EXISTS suites (
   tenant_id TEXT NOT NULL,
   name TEXT NOT NULL,
   case_ids TEXT NOT NULL DEFAULT '[]',
+  max_concurrency INTEGER NOT NULL DEFAULT 1 CHECK (max_concurrency > 0),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS suite_runs (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL,
-  suite_id TEXT NOT NULL REFERENCES suites(id)
+  suite_id TEXT NOT NULL REFERENCES suites(id),
+  max_concurrency INTEGER NOT NULL DEFAULT 1 CHECK (max_concurrency > 0)
 );
 
 CREATE INDEX IF NOT EXISTS idx_suite_runs_suite ON suite_runs(tenant_id, suite_id);
@@ -162,6 +192,13 @@ CREATE TABLE IF NOT EXISTS runs (
   fallback_reason TEXT NOT NULL DEFAULT '',
   started_at TEXT NOT NULL DEFAULT (datetime('now')),
   ended_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS run_step_evidence (
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  tenant_id TEXT NOT NULL,
+  steps_json TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, run_id)
 );
 
 CREATE TABLE IF NOT EXISTS case_schedules (

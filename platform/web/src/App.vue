@@ -1,6 +1,7 @@
 <script setup>
-import { computed, onMounted, ref, shallowRef } from 'vue'
-import { api, getTenant, setTenant } from './api'
+import { computed, ref, shallowRef } from 'vue'
+import { api, setSessionExpiredHandler, setTenant } from './api'
+import LoginForm from './components/LoginForm.vue'
 import OverviewView from './views/OverviewView.vue'
 import ProjectsView from './views/ProjectsView.vue'
 import RequirementsView from './views/RequirementsView.vue'
@@ -8,6 +9,7 @@ import VersionsView from './views/VersionsView.vue'
 import EnvironmentsView from './views/EnvironmentsView.vue'
 import CasesView from './views/CasesView.vue'
 import SuitesView from './views/SuitesView.vue'
+import WorkbenchView from './views/WorkbenchView.vue'
 import RunsView from './views/RunsView.vue'
 import BugsView from './views/BugsView.vue'
 import PatchesView from './views/PatchesView.vue'
@@ -23,13 +25,18 @@ const NAV = [
   { key: 'test-data', label: '测试数据', comp: TestDataView },
   { key: 'cases', label: '用例', comp: CasesView },
   { key: 'suites', label: '套件', comp: SuitesView },
+  { key: 'workbench', label: '企业流程', comp: WorkbenchView },
   { key: 'runs', label: '执行记录', comp: RunsView },
   { key: 'bugs', label: '缺陷', comp: BugsView },
   { key: 'patches', label: '自愈审批', comp: PatchesView },
   { key: 'settings', label: '设置', comp: SettingsView },
 ]
 
-const tenantId = ref(getTenant())
+const signedIn = ref(false)
+const tenantId = ref('')
+const memberships = ref([])
+const selectedTenant = ref('')
+const busy = ref(false)
 const draft = ref('')
 const current = ref('overview')
 const error = ref('')
@@ -42,49 +49,120 @@ function switchTo(key) {
   viewKey.value += 1
 }
 
-async function enter() {
-  const id = draft.value.trim()
-  if (!id) return
+function enter(id) {
   error.value = ''
   setTenant(id)
+  tenantId.value = id
+  switchTo('overview')
+}
+
+async function loadMemberships() {
+  busy.value = true
+  error.value = ''
+  memberships.value = []
+  selectedTenant.value = ''
   try {
-    await api.get('/api/overview')
-    tenantId.value = id
-    switchTo('overview')
+    const items = await api.get('/api/tenants')
+    if (signedIn.value) {
+      memberships.value = items
+      selectedTenant.value = items[0]?.id || ''
+    }
+  } catch (err) {
+    if (signedIn.value) error.value = err.message
+  } finally {
+    busy.value = false
+  }
+}
+
+async function login(credentials) {
+  if (busy.value) return
+  busy.value = true
+  error.value = ''
+  try {
+    await api.login(credentials)
+  } catch (err) {
+    error.value = err.message
+    busy.value = false
+    return
+  }
+  signedIn.value = true
+  await loadMemberships()
+}
+
+function resetWorkspace() {
+  setTenant('')
+  tenantId.value = ''
+  draft.value = ''
+  switchTo('overview')
+}
+
+function resetSession(message = '') {
+  resetWorkspace()
+  signedIn.value = false
+  memberships.value = []
+  selectedTenant.value = ''
+  error.value = message
+}
+
+setSessionExpiredHandler(() => resetSession('会话已失效，请重新登录'))
+
+async function logout() {
+  busy.value = true
+  error.value = ''
+  try {
+    await api.logout()
+    resetSession()
   } catch {
-    error.value = '工作区不存在'
+    if (signedIn.value) error.value = '退出登录失败，请重试'
+  } finally {
+    busy.value = false
   }
 }
 
 async function createWorkspace() {
-  const name = draft.value.trim() || '新租户'
+  if (busy.value) return
+  busy.value = true
+  error.value = ''
   try {
-    const t = await api.post('/api/tenants', { name })
-    setTenant(t.id)
-    tenantId.value = t.id
-    draft.value = ''
-    switchTo('overview')
-  } catch (e) { error.value = e.message }
+    const workspace = await api.post('/api/tenants', { name: draft.value.trim() || '新租户' })
+    if (signedIn.value) enter(workspace.id)
+  } catch (err) {
+    if (signedIn.value) error.value = err.message
+  } finally {
+    busy.value = false
+  }
 }
 
 function leave() {
-  localStorage.removeItem('platform.tenant')
-  tenantId.value = ''
+  resetWorkspace()
+  return loadMemberships()
 }
-
-onMounted(() => {
-  if (tenantId.value) api.get('/api/overview').catch(leave)
-})
 </script>
 
 <template>
-  <div v-if="!tenantId" class="gate">
+  <div v-if="!signedIn" class="gate">
     <div class="gate-box">
       <h1>测试平台</h1>
-      <input v-model="draft" placeholder="工作区 ID" @keyup.enter="enter" />
-      <button class="primary" @click="enter">进入</button>
-      <button class="ghost" @click="createWorkspace">新建工作区</button>
-      <p v-if="error" class="error">{{ error }}</p>
+      <LoginForm :busy="busy" :error="error" @login="login" />
+    </div>
+  </div>
+
+  <div v-else-if="!tenantId" class="gate">
+    <div class="gate-box">
+      <h1>测试平台</h1>
+      <label for="workspace">工作区</label>
+      <select id="workspace" v-model="selectedTenant" :disabled="busy || !memberships.length">
+        <option v-if="!memberships.length" value="">{{ busy ? '加载中…' : '暂无可选工作区' }}</option>
+        <option v-for="item in memberships" :key="item.id" :value="item.id">{{ item.name }}（{{ item.role }}）</option>
+      </select>
+      <button class="primary" :disabled="busy || !selectedTenant" @click="enter(selectedTenant)">进入</button>
+      <form class="workspace-form" @submit.prevent="createWorkspace">
+        <input v-model="draft" aria-label="新工作区名称" placeholder="新工作区名称" maxlength="128" :disabled="busy" />
+        <button class="ghost" type="submit" :disabled="busy">新建工作区</button>
+      </form>
+      <button v-if="error && !memberships.length" class="ghost" :disabled="busy" @click="loadMemberships">重新加载工作区</button>
+      <button class="ghost" :disabled="busy" @click="logout">退出登录</button>
+      <p v-if="error" class="error" role="alert">{{ error }}</p>
     </div>
   </div>
 
@@ -99,7 +177,9 @@ onMounted(() => {
           @click="switchTo(n.key)"
         >{{ n.label }}</button>
       </nav>
-      <button class="leave" @click="leave">切换工作区</button>
+      <button class="leave" :disabled="busy" @click="leave">切换工作区</button>
+      <button class="ghost" :disabled="busy" @click="logout">退出登录</button>
+      <p v-if="error" class="error" role="alert">{{ error }}</p>
     </aside>
 
     <main>
@@ -111,7 +191,8 @@ onMounted(() => {
 
 <style scoped>
 .gate { display: grid; place-items: center; min-height: 100vh; }
-.gate-box { width: 300px; display: flex; flex-direction: column; gap: 10px; }
+.gate-box { width: 300px; }
+.gate-box, .workspace-form { display: flex; flex-direction: column; gap: 10px; }
 .gate-box h1 { font-size: 20px; font-weight: 600; margin: 0 0 10px; }
 .ghost { border: 0; background: transparent; color: var(--muted); }
 

@@ -8,6 +8,7 @@ const suites = ref([])
 const cases = ref([])
 const name = ref('')
 const suiteId = ref('')
+const maxConcurrency = ref(1)
 const caseId = ref('')
 const selected = ref([])
 const batchId = ref('')
@@ -23,8 +24,9 @@ let mounted = true
 
 const caseNames = computed(() => new Map(cases.value.map((item) => [item.id, item.name])))
 const availableCases = computed(() => cases.value.filter((item) => !selected.value.includes(item.id)))
-const runPath = computed(() => `/api/suites/${encodeURIComponent(suiteId.value)}/run`)
-const schedulePath = computed(() => `/api/suites/${encodeURIComponent(suiteId.value)}/schedule`)
+const suitePath = computed(() => `/api/suites/${encodeURIComponent(suiteId.value)}`)
+const runPath = computed(() => `${suitePath.value}/run`)
+const schedulePath = computed(() => `${suitePath.value}/schedule`)
 
 async function request(action) {
   busy.value = true
@@ -53,6 +55,7 @@ async function loadHistory() {
 
 async function selectSuite(suite) {
   suiteId.value = suite.id
+  maxConcurrency.value = suite.max_concurrency
   selected.value = [...suite.case_ids]
   caseId.value = ''
   queuedId.value = ''
@@ -63,6 +66,13 @@ async function selectSuite(suite) {
   await loadHistory()
   const response = await api.get(schedulePath.value)
   applySchedule(response.schedule)
+}
+
+function saveConcurrency() {
+  return request(async () => {
+    const saved = await api.patch(suitePath.value, { max_concurrency: maxConcurrency.value })
+    suites.value.find((suite) => suite.id === saved.id).max_concurrency = saved.max_concurrency
+  })
 }
 
 function applySchedule(current) {
@@ -163,6 +173,14 @@ onUnmounted(() => { mounted = false })
     <p v-if="queuedId" role="status">已入队，批次 ID {{ queuedId }}</p>
   </form>
 
+  <form v-if="suiteId" class="card" aria-labelledby="suite-concurrency-label" :action="suitePath" method="post" @submit.prevent="saveConcurrency">
+    <label id="suite-concurrency-label" for="suite-concurrency">批次并发上限</label>
+    <div class="actions">
+      <input id="suite-concurrency" v-model.number="maxConcurrency" name="max_concurrency" type="number" min="1" step="1" required :disabled="busy" />
+      <button type="submit" :disabled="busy">保存并发上限</button>
+    </div>
+  </form>
+
   <form v-if="scheduleForm" class="card" aria-labelledby="suite-schedule" :action="schedulePath" method="post" @submit.prevent="saveSchedule">
     <h3 id="suite-schedule">套件每周计划</h3>
     <div class="actions">
@@ -209,7 +227,7 @@ onUnmounted(() => { mounted = false })
       </div>
     </form>
     <template v-if="summary">
-      <p role="status">批次 {{ summary.id }} · 共 {{ summary.total }} · 通过 {{ summary.passed }} · 失败 {{ summary.failed }} · 需复核 {{ summary.needs_review }}</p>
+      <p role="status">批次 {{ summary.id }} · 并发上限 {{ summary.max_concurrency }} · 共 {{ summary.total }} · 通过 {{ summary.passed }} · 失败 {{ summary.failed }} · 需复核 {{ summary.needs_review }}</p>
       <DataTable :rows="summary.runs" :columns="[
         { key: 'case_id', label: '用例' },
         { key: 'status', label: '状态' },

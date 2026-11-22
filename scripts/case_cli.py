@@ -1,4 +1,4 @@
-"""离线转换录制步骤与结构化 UI 用例工作簿。"""
+"""本地录制 UI 草稿与离线转换结构化 UI 用例。"""
 
 import argparse
 import json
@@ -12,6 +12,10 @@ from openpyxl.utils.exceptions import InvalidFileException
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+
+    record = commands.add_parser("record-ui", help="打开 Chromium 录制结构化 UI 草稿")
+    record.add_argument("url", help="测试站点的 HTTP(S) 起始 URL")
+    record.add_argument("output", help="草稿 JSON 文件，或 - 输出到 stdout")
 
     convert = commands.add_parser("convert-recorded", help="录制事件 JSON 数组转场景 JSON")
     convert.add_argument("input", help="事件 JSON 文件，或 - 读取 stdin")
@@ -27,7 +31,13 @@ def main():
 
     args = parser.parse_args()
     try:
-        if args.command == "convert-recorded":
+        if args.command == "record-ui":
+            from agents.recorder import record_from_terminal
+
+            draft = record_from_terminal(args.url)
+            if draft is not None:
+                write_json(args.output, draft)
+        elif args.command == "convert-recorded":
             events = read_json(args.input)
             if not isinstance(events, list):
                 raise ValueError("录制事件 JSON 必须是数组")

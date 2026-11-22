@@ -1,0 +1,89 @@
+name: Deployment packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - '.github/workflows/deployment.yml'
+      - 'deploy/**'
+      - 'packaging/**'
+      - 'platform/server/**'
+      - 'platform/web/**'
+      - 'agents/**'
+      - 'auto_ai/**'
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      AUTOTEST_IMAGE: autotest-platform:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash deploy/smoke_compose.sh
+      - name: Export verified Linux image
+        run: docker save "$AUTOTEST_IMAGE" | gzip > Auto-Test-linux-amd64.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Auto-Test-linux-amd64
+          path: Auto-Test-linux-amd64.tar.gz
+          if-no-files-found: error
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            artifact: Auto-Test-windows-x64
+          - runner: macos-15
+            artifact: Auto-Test-macos-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: platform/server/go.mod
+          cache-dependency-path: platform/server/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: platform/web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build Windows installer with verified Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $setup
+          if ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash -ne '9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732') { throw 'Inno Setup checksum mismatch' }
+          if ((Get-AuthenticodeSignature -LiteralPath $setup).Status -ne 'Valid') { throw 'Inno Setup signature invalid' }
+          $tool = Join-Path $env:RUNNER_TEMP 'inno'
+          $proc = Start-Process -FilePath $setup -ArgumentList "/CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$tool`"" -WindowStyle Hidden -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Inno Setup install failed: $($proc.ExitCode)" }
+          python packaging/build_desktop.py --output artifacts --iscc (Join-Path $tool 'ISCC.exe')
+      - name: Smoke installed Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./packaging/smoke_windows.ps1 -Installer artifacts/Auto-Test-windows-x64-setup.exe
+      - name: Build and smoke macOS disk image
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          test "$(uname -m)" = arm64
+          python packaging/build_desktop.py --output artifacts
+          bash packaging/smoke_macos.sh artifacts/Auto-Test-macos-arm64.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/
+          if-no-files-found: error

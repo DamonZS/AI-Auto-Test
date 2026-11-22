@@ -48,6 +48,7 @@ func TestWeeklySuiteScheduleQueuesOrderedMembersOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	call(http.MethodGet, path, "tenant-a", nil, http.StatusOK)
+	call(http.MethodPatch, "/api/suites/suite-a", "tenant-a", []byte(`{"max_concurrency":2}`), http.StatusOK)
 	call(http.MethodPut, "/api/suites/suite-b/schedule", "tenant-b", request, http.StatusOK)
 	due := time.Date(2026, 11, 23, 4, 0, 0, 0, time.Local)
 	if queued := server.fireDueSchedules(due.Add(-time.Minute)); len(queued) != 0 {
@@ -57,8 +58,10 @@ func TestWeeklySuiteScheduleQueuesOrderedMembersOnce(t *testing.T) {
 	if len(queued) != 1 {
 		t.Fatalf("due tick queued %v, want one suite batch", queued)
 	}
+	call(http.MethodPatch, "/api/suites/suite-a", "tenant-a", []byte(`{"max_concurrency":1}`), http.StatusOK)
 	var summary struct {
-		Runs []struct {
+		MaxConcurrency int `json:"max_concurrency"`
+		Runs           []struct {
 			CaseID string `json:"case_id"`
 			Status string `json:"status"`
 		} `json:"runs"`
@@ -67,8 +70,8 @@ func TestWeeklySuiteScheduleQueuesOrderedMembersOnce(t *testing.T) {
 	if err := json.Unmarshal([]byte(call(http.MethodGet, summaryPath, "tenant-a", nil, http.StatusOK)), &summary); err != nil {
 		t.Fatal(err)
 	}
-	if len(summary.Runs) != 2 || summary.Runs[0].CaseID != "case-c" || summary.Runs[1].CaseID != "case-a" || summary.Runs[0].Status != "queued" || summary.Runs[1].Status != "queued" {
-		t.Fatalf("unexpected child runs: %+v", summary.Runs)
+	if summary.MaxConcurrency != 2 || len(summary.Runs) != 2 || summary.Runs[0].CaseID != "case-c" || summary.Runs[1].CaseID != "case-a" || summary.Runs[0].Status != "queued" || summary.Runs[1].Status != "queued" {
+		t.Fatalf("unexpected scheduled batch: %+v", summary)
 	}
 	var dataset, row string
 	if err := st.DB.QueryRow(`SELECT dataset_id, data_row_id FROM runs WHERE suite_run_id = ? AND case_id = 'case-c'`, queued[0]).Scan(&dataset, &row); err != nil || dataset != "dataset-c" || row != "row-c" {
@@ -96,8 +99,12 @@ func TestWeeklySuiteScheduleQueuesOrderedMembersOnce(t *testing.T) {
 	if _, err := st.DB.Exec("UPDATE cases SET status = 'approved' WHERE id = 'case-a'"); err != nil {
 		t.Fatal(err)
 	}
-	if next := server.fireDueSchedules(due.AddDate(0, 0, 14)); len(next) != 1 || next[0] == queued[0] {
+	next := server.fireDueSchedules(due.AddDate(0, 0, 14))
+	if len(next) != 1 || next[0] == queued[0] {
 		t.Fatalf("next eligible week queued %v, want a new batch", next)
+	}
+	if err := json.Unmarshal([]byte(call(http.MethodGet, "/api/suite-runs/"+next[0], "tenant-a", nil, http.StatusOK)), &summary); err != nil || summary.MaxConcurrency != 1 {
+		t.Fatalf("next scheduled batch concurrency = %d, err = %v", summary.MaxConcurrency, err)
 	}
 	call(http.MethodPut, path, "tenant-a", []byte(`{"enabled":false,"weekday":1,"hour":4,"minute":0}`), http.StatusOK)
 	if disabled := server.fireDueSchedules(due.AddDate(0, 0, 21)); len(disabled) != 0 {
@@ -113,7 +120,9 @@ func TestWeeklySuiteScheduleOpensExistingStore(t *testing.T) {
 	}
 	seedMCPData(t, legacy)
 	if _, err := legacy.DB.Exec(`DROP TABLE IF EXISTS suite_schedules;
+		ALTER TABLE suite_runs DROP COLUMN max_concurrency;
 		INSERT INTO suites (id, tenant_id, name) VALUES ('old-suite', 'tenant-a', 'Old Suite');
+		INSERT INTO suite_runs (id, tenant_id, suite_id) VALUES ('old-batch', 'tenant-a', 'old-suite');
 		INSERT INTO case_schedules (case_id, tenant_id, weekday, hour, minute) VALUES ('case-a', 'tenant-a', 1, 4, 0)`); err != nil {
 		legacy.Close()
 		t.Fatal(err)
@@ -138,5 +147,9 @@ func TestWeeklySuiteScheduleOpensExistingStore(t *testing.T) {
 	var count int
 	if err := st.DB.QueryRow("SELECT count(*) FROM case_schedules WHERE case_id = 'case-a'").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("old case schedules = %d, err = %v", count, err)
+	}
+	var maxConcurrency int
+	if err := st.DB.QueryRow("SELECT max_concurrency FROM suite_runs WHERE id = 'old-batch'").Scan(&maxConcurrency); err != nil || maxConcurrency != 1 {
+		t.Fatalf("old batch concurrency = %d, err = %v", maxConcurrency, err)
 	}
 }

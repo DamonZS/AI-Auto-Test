@@ -29,7 +29,7 @@ func TestCombinedDeploymentServesWebAndMCP(t *testing.T) {
 	if _, err := database.DB.Exec("INSERT INTO tenants (id, name) VALUES ('fixture', 'Fixture')"); err != nil {
 		t.Fatal(err)
 	}
-	handler := routes(api.New(database).Routes(), webDirectory)
+	handler := routes(api.New(database, api.AuthOptions{InsecureDevAuth: true}).Routes(), webDirectory)
 	webResponse := httptest.NewRecorder()
 	handler.ServeHTTP(webResponse, httptest.NewRequest(http.MethodGet, "/", nil))
 	if webResponse.Code != http.StatusOK || webResponse.Body.String() != "Auto-Test fixture" {

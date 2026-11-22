@@ -7,7 +7,7 @@ import (
 )
 
 func (s *Server) listSuites(w http.ResponseWriter, r *http.Request, tid string) {
-	rows, err := s.st.DB.Query("SELECT id, tenant_id, name, created_at, case_ids FROM suites WHERE tenant_id = ? ORDER BY created_at DESC, id", tid)
+	rows, err := s.st.DB.Query("SELECT id, tenant_id, name, created_at, case_ids, max_concurrency FROM suites WHERE tenant_id = ? ORDER BY created_at DESC, id", tid)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -36,7 +36,29 @@ func (s *Server) createSuite(w http.ResponseWriter, r *http.Request, tid string)
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	write(w, http.StatusOK, map[string]any{"id": suiteID, "name": body.Name, "case_ids": []string{}})
+	write(w, http.StatusOK, map[string]any{"id": suiteID, "name": body.Name, "case_ids": []string{}, "max_concurrency": 1})
+}
+
+func (s *Server) updateSuiteConcurrency(w http.ResponseWriter, r *http.Request, tid string) {
+	var body struct {
+		MaxConcurrency int `json:"max_concurrency"`
+	}
+	if err := decode(r, &body); err != nil || body.MaxConcurrency < 1 {
+		fail(w, http.StatusBadRequest, "max_concurrency 必须是正整数")
+		return
+	}
+	suiteID := r.PathValue("id")
+	err := s.st.DB.QueryRow(`UPDATE suites SET max_concurrency = ? WHERE id = ? AND tenant_id = ? RETURNING id`,
+		body.MaxConcurrency, suiteID, tid).Scan(&suiteID)
+	if err == sql.ErrNoRows {
+		fail(w, http.StatusNotFound, "套件不存在")
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"id": suiteID, "max_concurrency": body.MaxConcurrency})
 }
 
 func (s *Server) runSuite(w http.ResponseWriter, r *http.Request, tid string) {
@@ -62,6 +84,10 @@ func (s *Server) runSuite(w http.ResponseWriter, r *http.Request, tid string) {
 		return
 	}
 	defer tx.Rollback()
+	if _, err = tx.Exec("UPDATE suites SET case_ids = ? WHERE id = ? AND tenant_id = ?", mustJSON(body.CaseIDs), suiteID, tid); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	for _, caseID := range body.CaseIDs {
 		var status string
 		if err = tx.QueryRow("SELECT status FROM cases WHERE id = ? AND tenant_id = ?", caseID, tid).Scan(&status); err != nil {
@@ -78,11 +104,10 @@ func (s *Server) runSuite(w http.ResponseWriter, r *http.Request, tid string) {
 		}
 	}
 	runID := id()
-	if _, err = tx.Exec("UPDATE suites SET case_ids = ? WHERE id = ? AND tenant_id = ?", mustJSON(body.CaseIDs), suiteID, tid); err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if _, err = tx.Exec("INSERT INTO suite_runs (id, tenant_id, suite_id) VALUES (?, ?, ?)", runID, tid, suiteID); err != nil {
+	var maxConcurrency int
+	if err = tx.QueryRow(`INSERT INTO suite_runs (id, tenant_id, suite_id, max_concurrency)
+		SELECT ?, tenant_id, id, max_concurrency FROM suites WHERE id = ? AND tenant_id = ? RETURNING max_concurrency`,
+		runID, suiteID, tid).Scan(&maxConcurrency); err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -94,7 +119,7 @@ func (s *Server) runSuite(w http.ResponseWriter, r *http.Request, tid string) {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	write(w, http.StatusOK, map[string]string{"id": runID, "status": "queued"})
+	write(w, http.StatusOK, map[string]any{"id": runID, "status": "queued", "max_concurrency": maxConcurrency})
 }
 
 func enqueueSuiteMembers(tx *sql.Tx, tid, runID string, caseIDs []string) error {
@@ -152,8 +177,9 @@ func (s *Server) listSuiteRuns(w http.ResponseWriter, r *http.Request, tid strin
 
 func (s *Server) suiteRunSummary(w http.ResponseWriter, r *http.Request, tid string) {
 	runID := r.PathValue("id")
-	rows, err := s.st.DB.Query(`SELECT case_id, status, passed, needs_review
-		FROM runs WHERE tenant_id = ? AND suite_run_id = ? ORDER BY rowid`, tid, runID)
+	rows, err := s.st.DB.Query(`SELECT run.case_id, run.status, run.passed, run.needs_review, batch.max_concurrency
+		FROM runs run JOIN suite_runs batch ON batch.id = run.suite_run_id AND batch.tenant_id = run.tenant_id
+		WHERE run.tenant_id = ? AND run.suite_run_id = ? ORDER BY run.rowid`, tid, runID)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -167,11 +193,12 @@ func (s *Server) suiteRunSummary(w http.ResponseWriter, r *http.Request, tid str
 	}
 	results := []result{}
 	passed, failed, needsReview := 0, 0, 0
+	var maxConcurrency int
 	for rows.Next() {
 		var item result
 		var pass sql.NullBool
 		var review int
-		if err := rows.Scan(&item.CaseID, &item.Status, &pass, &review); err != nil {
+		if err := rows.Scan(&item.CaseID, &item.Status, &pass, &review, &maxConcurrency); err != nil {
 			fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -198,5 +225,5 @@ func (s *Server) suiteRunSummary(w http.ResponseWriter, r *http.Request, tid str
 		fail(w, http.StatusNotFound, "套件执行记录不存在")
 		return
 	}
-	write(w, http.StatusOK, map[string]any{"id": runID, "total": len(results), "passed": passed, "failed": failed, "needs_review": needsReview, "runs": results})
+	write(w, http.StatusOK, map[string]any{"id": runID, "total": len(results), "passed": passed, "failed": failed, "needs_review": needsReview, "runs": results, "max_concurrency": maxConcurrency})
 }

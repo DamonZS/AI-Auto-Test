@@ -32,6 +32,15 @@ func Open(path string) (*Store, error) {
 	if err := migrateAdditiveColumns(db); err != nil {
 		return nil, err
 	}
+	if err := MigrateWorkbench(db); err != nil {
+		return nil, err
+	}
+	if err := MigrateCoverage(db); err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_runs_batch_status ON runs (tenant_id, suite_run_id, status)"); err != nil {
+		return nil, err
+	}
 	masterKey, err := loadMasterKey(path + ".key")
 	if err != nil {
 		return nil, err
@@ -49,6 +58,8 @@ func migrateAdditiveColumns(db *sql.DB) error {
 		"ALTER TABLE runs ADD COLUMN data_row_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE runs ADD COLUMN suite_run_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE suites ADD COLUMN case_ids TEXT NOT NULL DEFAULT '[]'",
+		"ALTER TABLE suites ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 1 CHECK (max_concurrency > 0)",
+		"ALTER TABLE suite_runs ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 1 CHECK (max_concurrency > 0)",
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil && !strings.Contains(err.Error(), "duplicate column name") {

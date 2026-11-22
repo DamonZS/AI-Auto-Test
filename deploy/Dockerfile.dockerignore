@@ -1,0 +1,16 @@
+**
+!deploy/worker-requirements.txt
+!platform/web/package.json
+!platform/web/package-lock.json
+!platform/web/index.html
+!platform/web/vite.config.js
+!platform/web/src/**/*.js
+!platform/web/src/**/*.vue
+!platform/web/src/**/*.css
+!platform/server/go.mod
+!platform/server/go.sum
+!platform/server/cmd/**/*.go
+!platform/server/internal/**/*.go
+!platform/server/internal/store/schema.sql
+!agents/*.py
+!auto_ai/*.py

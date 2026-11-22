@@ -8,9 +8,11 @@ const rows = ref([])
 const projects = ref([])
 const requirements = ref([])
 const environments = ref([])
+const versions = ref([])
 const datasets = ref([])
 const dataRecords = ref([])
 const projectId = ref('')
+const runVersion = ref('')
 const statusFilter = ref('')
 const form = ref({ name: '', type: 'ui', scenario: '', requirement_id: '', environment_id: '', expected_source: 'requirement', dataset_id: '', data_row_id: '' })
 const error = ref('')
@@ -33,6 +35,15 @@ const columns = [
 
 const TYPE_LABEL = { ui: 'UI', api: '接口', perf: '性能' }
 const MODE_LABEL = { manual: '手工', sampling: 'Agent', task_pack: '任务包', platform_llm: '平台模型' }
+const ELEMENT_ACTIONS = ['click', 'fill', 'select', 'check', 'uncheck']
+const TEXT_ACTIONS = ['wait_text', 'assert_text']
+
+function encodeSteps() {
+  return JSON.stringify({ steps: steps.value.map((step) => {
+    const { frame, row, ...fields } = step
+    return { ...fields, ...(frame?.trim() && { frame: frame.trim() }), ...(row?.trim() && { row: row.trim() }) }
+  }) })
+}
 
 const filtered = computed(() => {
   return rows.value.filter((r) => {
@@ -45,11 +56,12 @@ const projectDatasets = computed(() => datasets.value.filter((dataset) => datase
 const selectedDataFields = computed(() => datasets.value.find((dataset) => dataset.id === form.value.dataset_id)?.fields || [])
 
 async function load() {
-  ;[projects.value, requirements.value, environments.value, datasets.value] = await Promise.all([
+  ;[projects.value, requirements.value, environments.value, datasets.value, versions.value] = await Promise.all([
     api.get('/api/projects'),
     api.get('/api/requirements'),
     api.get('/api/environments'),
     api.get('/api/test-data/datasets'),
+    api.get('/api/versions'),
   ])
   rows.value = await api.get('/api/cases')
   if (!projectId.value && projects.value.length) projectId.value = projects.value[0].id
@@ -63,13 +75,36 @@ async function loadDataRecords() {
 }
 
 function changeProject() {
+  runVersion.value = ''
+  form.value.requirement_id = ''
+  form.value.environment_id = ''
   form.value.dataset_id = ''
   form.value.data_row_id = ''
   dataRecords.value = []
 }
 
+async function importScenario(event) {
+  const [file] = event.target.files
+  if (!file) return
+  error.value = ''
+  try {
+    const scenario = JSON.parse(await file.text())
+    if (!Array.isArray(scenario?.steps) || !scenario.steps.length || scenario.steps.some((step) => typeof step?.action !== 'string')) {
+      throw new Error('文件必须包含结构化 UI 步骤')
+    }
+    form.value.type = 'ui'
+    form.value.name ||= file.name.replace(/\.json$/i, '')
+    structured.value = true
+    steps.value = scenario.steps
+  } catch (problem) {
+    error.value = problem.message
+  } finally {
+    event.target.value = ''
+  }
+}
+
 async function add() {
-  const scenario = structured.value && form.value.type === 'ui' ? JSON.stringify({ steps: steps.value }) : form.value.scenario
+  const scenario = structured.value && form.value.type === 'ui' ? encodeSteps() : form.value.scenario
   if (!form.value.name || !scenario) return
   error.value = ''
   try {
@@ -113,7 +148,7 @@ function removeStep(index) {
 }
 
 async function saveEdit() {
-  const scenario = editing.value.structured ? JSON.stringify({ steps: steps.value }) : editing.value.scenario
+  const scenario = editing.value.structured ? encodeSteps() : editing.value.scenario
   if (!scenario.trim()) return
   error.value = ''
   try {
@@ -140,7 +175,7 @@ async function review(row, decision) {
 async function run(row) {
   error.value = ''
   try {
-    await api.post(`/api/cases/${row.id}/run`, {})
+    await api.post(`/api/cases/${row.id}/run`, { version_id: runVersion.value })
     alert('已提交执行，到「执行记录」查看')
   } catch (e) { error.value = e.message }
 }
@@ -209,9 +244,14 @@ onMounted(load)
       </select>
       <input v-if="!structured || form.type !== 'ui'" v-model="form.scenario" aria-label="场景描述" placeholder="场景描述" class="scenario" />
       <button v-if="form.type === 'ui'" type="button" @click="toggleStructured('new')">{{ structured ? '自然语言场景' : '结构化步骤' }}</button>
+      <label v-if="form.type === 'ui'">导入步骤 JSON<input type="file" name="scenario-file" accept=".json,application/json" @change="importScenario" /></label>
       <select v-model="form.requirement_id" title="关联需求">
         <option value="">无关联需求</option>
-        <option v-for="r in requirements" :key="r.id" :value="r.id">{{ r.code || r.title }}</option>
+        <option v-for="r in requirements.filter((item) => item.project_id === projectId)" :key="r.id" :value="r.id">{{ r.code || r.title }}</option>
+      </select>
+      <select v-model="form.environment_id" aria-label="测试环境">
+        <option value="">项目默认环境</option>
+        <option v-for="environment in environments.filter((item) => item.project_id === projectId)" :key="environment.id" :value="environment.id">{{ environment.name }}</option>
       </select>
       <select v-model="form.dataset_id" aria-label="绑定测试数据集" @change="loadDataRecords">
         <option value="">不绑定数据集</option>
@@ -229,17 +269,22 @@ onMounted(load)
         <label>动作
           <select v-model="step.action" :name="`new-step-${index}-action`">
             <option value="navigate">打开页面</option><option value="click">点击</option>
-            <option value="fill">填写</option><option value="wait_text">等待文本</option>
+            <option value="fill">填写</option><option value="select">选择下拉选项</option>
+            <option value="check">勾选</option><option value="uncheck">取消勾选</option><option value="wait_text">等待文本</option>
             <option value="assert_text">断言文本</option><option value="assert_url">断言地址</option>
           </select>
         </label>
         <label v-if="step.action === 'navigate'">URL<input v-model="step.url" :name="`new-step-${index}-url`" required /></label>
-        <template v-if="['click', 'fill'].includes(step.action)">
+        <template v-if="ELEMENT_ACTIONS.includes(step.action)">
           <label>角色<input v-model="step.role" :name="`new-step-${index}-role`" required placeholder="button / textbox" /></label>
           <label>名称<input v-model="step.name" :name="`new-step-${index}-name`" required /></label>
         </template>
-        <label v-if="step.action === 'fill'">数据字段<input v-model="step.data_key" :name="`new-step-${index}-data-key`" required /></label>
-        <label v-if="['wait_text', 'assert_text'].includes(step.action)">文本<input v-model="step.text" :name="`new-step-${index}-text`" required /></label>
+        <label v-if="['fill', 'select'].includes(step.action)">数据字段<input v-model="step.data_key" :name="`new-step-${index}-data-key`" required /></label>
+        <label v-if="TEXT_ACTIONS.includes(step.action)">文本<input v-model="step.text" :name="`new-step-${index}-text`" required /></label>
+        <template v-if="ELEMENT_ACTIONS.includes(step.action) || TEXT_ACTIONS.includes(step.action)">
+          <label>iframe 测试 ID<input v-model="step.frame" :name="`new-step-${index}-frame`" /></label>
+          <label>目标行文本<input v-model="step.row" :name="`new-step-${index}-row`" /></label>
+        </template>
         <template v-if="step.action === 'assert_url'">
           <label>URL<input v-model="step.expected" :name="`new-step-${index}-url`" required /></label>
           <label>匹配方式<select v-model="step.match" :name="`new-step-${index}-match`"><option value="contains">包含</option><option value="equals">完全一致</option></select></label>
@@ -249,6 +294,12 @@ onMounted(load)
       <button type="button" @click="addStep">添加步骤</button>
     </section>
     <p class="hint">草稿 → 待审核 → 已定稿；只有已定稿才用于正式回归</p>
+    <label v-if="projectId">执行版本
+      <select v-model="runVersion" name="run-version">
+        <option value="">不关联版本</option>
+        <option v-for="version in versions.filter((item) => item.project_id === projectId)" :key="version.id" :value="version.id">{{ version.name }}</option>
+      </select>
+    </label>
   </header>
   <p v-if="error" class="error">{{ error }}</p>
 
@@ -289,17 +340,22 @@ onMounted(load)
           <label>动作
             <select v-model="step.action" :name="`edit-step-${index}-action`">
               <option value="navigate">打开页面</option><option value="click">点击</option>
-              <option value="fill">填写</option><option value="wait_text">等待文本</option>
+              <option value="fill">填写</option><option value="select">选择下拉选项</option>
+              <option value="check">勾选</option><option value="uncheck">取消勾选</option><option value="wait_text">等待文本</option>
               <option value="assert_text">断言文本</option><option value="assert_url">断言地址</option>
             </select>
           </label>
           <label v-if="step.action === 'navigate'">URL<input v-model="step.url" :name="`edit-step-${index}-url`" required /></label>
-          <template v-if="['click', 'fill'].includes(step.action)">
+          <template v-if="ELEMENT_ACTIONS.includes(step.action)">
             <label>角色<input v-model="step.role" :name="`edit-step-${index}-role`" required placeholder="button / textbox" /></label>
             <label>名称<input v-model="step.name" :name="`edit-step-${index}-name`" required /></label>
           </template>
-          <label v-if="step.action === 'fill'">数据字段<input v-model="step.data_key" :name="`edit-step-${index}-data-key`" required /></label>
-          <label v-if="['wait_text', 'assert_text'].includes(step.action)">文本<input v-model="step.text" :name="`edit-step-${index}-text`" required /></label>
+          <label v-if="['fill', 'select'].includes(step.action)">数据字段<input v-model="step.data_key" :name="`edit-step-${index}-data-key`" required /></label>
+          <label v-if="TEXT_ACTIONS.includes(step.action)">文本<input v-model="step.text" :name="`edit-step-${index}-text`" required /></label>
+          <template v-if="ELEMENT_ACTIONS.includes(step.action) || TEXT_ACTIONS.includes(step.action)">
+            <label>iframe 测试 ID<input v-model="step.frame" :name="`edit-step-${index}-frame`" /></label>
+            <label>目标行文本<input v-model="step.row" :name="`edit-step-${index}-row`" /></label>
+          </template>
           <template v-if="step.action === 'assert_url'">
             <label>URL<input v-model="step.expected" :name="`edit-step-${index}-url`" required /></label>
             <label>匹配方式<select v-model="step.match" :name="`edit-step-${index}-match`"><option value="contains">包含</option><option value="equals">完全一致</option></select></label>

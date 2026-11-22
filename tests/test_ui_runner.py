@@ -269,6 +269,38 @@ class ExecuteUITaskTests(unittest.TestCase):
 
 
 class LocalBrowserDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_structured_ui_controls_with_frame_row_and_open_shadow_root(self):
+        from html import escape
+        from urllib.parse import quote
+        from agents.ui_runner import execute_ui_task
+        from auto_ai.config import config
+
+        form = """<table><tr><td>Unchanged</td><td><label>Ready <input type=checkbox></label></td></tr>
+        <tr><td>Order 21</td><td><label>Ready <input type=checkbox></label>
+        <label>Priority <select><option value=normal>Normal</option><option value=urgent>Urgent</option></select></label>
+        <span id=result>Pending</span></td></tr></table><script>
+        document.querySelector('select').addEventListener('change', (event) => {
+          if (event.target.value === 'urgent' && document.querySelectorAll('input')[1].checked)
+            document.querySelector('#result').textContent = 'Saved';
+        });</script>"""
+        page = f'''<iframe data-testid="orders" srcdoc="{escape(form, quote=True)}"></iframe>
+        <div id="host"></div><script>document.querySelector('#host').attachShadow({{mode:'open'}}).innerHTML =
+        `<button onclick="this.textContent='Done'">Finish</button>`;</script>'''
+        steps = [
+            {"action": "navigate", "url": "data:text/html," + quote(page)},
+            {"action": "check", "frame": "orders", "row": "Order 21", "role": "checkbox", "name": "Ready"},
+            {"action": "select", "frame": "orders", "row": "Order 21", "role": "combobox", "name": "Priority", "data_key": "priority"},
+            {"action": "assert_text", "frame": "orders", "row": "Order 21", "text": "Saved"},
+            {"action": "click", "role": "button", "name": "Finish"},
+            {"action": "assert_text", "text": "Done"},
+        ]
+        with patch.object(config, "NEO4J_ENABLED", False):
+            result = await execute_ui_task({"scenario": {"steps": steps}, "data": {"priority": "urgent"}}, {})
+        self.assertEqual(result["status"], "passed", result)
+        self.assertEqual([step["action"] for step in result["steps"]], [step["action"] for step in steps])
+        self.assertTrue(all(step["duration_ms"] >= 0 for step in result["steps"]))
+        self.assertNotIn("urgent", str(result))
+
     async def test_structured_failure_includes_real_browser_events(self):
         from agents.ui_runner import execute_ui_task
         from auto_ai.config import config

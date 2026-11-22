@@ -86,6 +86,31 @@ func TestMCPJSONRPCLifecycleAndTenantIsolation(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("valid agent token unexpectedly required formal login/RBAC: status=%d body=%s", response.Code, response.Body.String())
 	}
+
+	for origin, status := range map[string]int{"https://example.com": 200, "https://other.invalid": 403, "null": 403} {
+		request := httptest.NewRequest(http.MethodPost, "https://example.com/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+		request.Header.Set("X-Agent-Token", "tenant:tenant-a")
+		request.Header.Set("Origin", origin)
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, request)
+		if response.Code != status {
+			t.Fatalf("Origin %q got status %d, want %d", origin, response.Code, status)
+		}
+	}
+}
+
+func TestMCPStillQueuesLegacyDraftCases(t *testing.T) {
+	st := openTestStore(t)
+	seedMCPData(t, st)
+	response := sendMCPRequest(t, New(st).Routes(), "tenant-a", map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": "create_test_task", "arguments": map[string]any{"case_id": "case-a"}},
+	})
+	result, _ := response["result"].(map[string]any)
+	queued, _ := result["structuredContent"].(map[string]any)
+	if queued["status"] != "queued" || queued["run_id"] == "" || queued["run_id"] == nil {
+		t.Fatalf("legacy draft no longer queues: %#v", response)
+	}
 }
 
 func openTestStore(t *testing.T) *store.Store {

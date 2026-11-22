@@ -18,6 +18,8 @@ reports/
 screenshots/
 platform/web/dist/
 platform/server/bin/
+/artifacts/
+/data/
 record-studio/frontend/dist/
 record-studio/frontend/_vite.log
 record-studio/backend/_*

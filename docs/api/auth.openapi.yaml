@@ -1,0 +1,235 @@
+openapi: 3.0.3
+info:
+  title: Auto-Test tenant authentication
+  version: 1.0.0
+  description: Authentication contract for the existing control-plane API and service entry points.
+paths:
+  /api/auth/login:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, minLength: 1, maxLength: 128, x-maxUtf8Bytes: 128 }
+                password: { type: string, format: password, minLength: 1, maxLength: 1024, x-maxUtf8Bytes: 1024 }
+      responses:
+        '200':
+          description: New eight-hour browser session. Cache-Control is no-store.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssuedCredential' }
+        '400': { $ref: '#/components/responses/InvalidInput' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/auth/logout:
+    post:
+      security: [{ WebSession: [] }]
+      responses:
+        '204': { description: The current session has been revoked. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/tenants:
+    get:
+      security: [{ WebSession: [] }]
+      responses:
+        '200':
+          description: All current memberships of the caller, without pagination.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, name, plan, created_at, role]
+                  properties:
+                    id: { type: string }
+                    name: { type: string }
+                    plan: { type: string }
+                    created_at: { type: string }
+                    role: { $ref: '#/components/schemas/Role' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      description: A provisioned human account may create a separate workspace and becomes its owner in the same transaction.
+      security: [{ WebSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 128, x-maxUtf8Bytes: 128 }
+      responses:
+        '200':
+          description: Created workspace.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, name]
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+        '400': { $ref: '#/components/responses/InvalidInput' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/auth/service-tokens:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+    get:
+      description: Owner-only list of current service credentials, without plaintext secrets or pagination.
+      security: [{ WebSession: [] }]
+      responses:
+        '200':
+          description: Credential metadata, including expired credentials until revoked.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ServiceCredential' }
+        '400': { $ref: '#/components/responses/InvalidInput' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      description: Owner-only issuance. The 90-day secret is returned once.
+      security: [{ WebSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope]
+              properties:
+                scope: { $ref: '#/components/schemas/ServiceScope' }
+      responses:
+        '201':
+          description: Service credential issued for the selected tenant. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/IssuedCredential'
+                  - $ref: '#/components/schemas/ServiceCredential'
+        '400': { $ref: '#/components/responses/InvalidInput' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/auth/service-tokens/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    delete:
+      description: Owner-only revocation for the selected tenant.
+      security: [{ WebSession: [] }]
+      responses:
+        '204': { description: The credential has been revoked. }
+        '400': { $ref: '#/components/responses/InvalidInput' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: No credential with this ID exists for the selected tenant. }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/agent/settings:
+    get:
+      description: Worker-only runtime settings for the tenant bound to the credential. The existing settings response may include the model API key. Cache-Control is no-store.
+      security: [{ ServiceBearer: [] }, { ServiceHeader: [] }]
+      x-required-scope: worker
+      responses:
+        '200': { description: Worker settings. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /mcp:
+    post:
+      description: Existing MCP JSON-RPC entry point for the tenant bound to the credential.
+      security: [{ ServiceBearer: [] }, { ServiceHeader: [] }]
+      x-required-scope: mcp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [jsonrpc, method] }
+      responses:
+        '200': { description: MCP JSON-RPC response. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+components:
+  securitySchemes:
+    WebSession:
+      type: http
+      scheme: bearer
+      description: Issued by the password login endpoint.
+    ServiceBearer:
+      type: http
+      scheme: bearer
+      description: Opaque worker or MCP credential with the route-specific scope.
+    ServiceHeader:
+      type: apiKey
+      in: header
+      name: X-Agent-Token
+      description: Alternative service credential header. Authorization takes precedence when present.
+  parameters:
+    Tenant:
+      name: X-Tenant-Id
+      in: header
+      required: true
+      description: Tenant selection for authenticated Web requests. Membership is resolved server-side.
+      schema: { type: string, minLength: 1 }
+  schemas:
+    Role:
+      type: string
+      enum: [owner, editor, viewer]
+    ServiceScope:
+      type: string
+      enum: [worker, mcp]
+    IssuedCredential:
+      type: object
+      required: [token, expires_at]
+      properties:
+        token: { type: string }
+        expires_at: { type: string, format: date-time }
+    ServiceCredential:
+      type: object
+      required: [id, scope, expires_at]
+      properties:
+        id: { type: string }
+        scope: { $ref: '#/components/schemas/ServiceScope' }
+        expires_at: { type: string, format: date-time }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+  responses:
+    InvalidInput:
+      description: Invalid JSON, required field, parameter or tenant selection.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthenticated:
+      description: Missing, invalid, expired or revoked credential, or incorrect login details.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: The credential lacks the required tenant membership, role or scope.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InternalError:
+      description: Authentication or storage service unavailable.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

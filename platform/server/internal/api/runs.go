@@ -6,12 +6,19 @@ import (
 	"net/http"
 )
 
+type runStep struct {
+	Number     int    `json:"step"`
+	Action     string `json:"action"`
+	Status     string `json:"status"`
+	DurationMS int    `json:"duration_ms"`
+}
+
 func (s *Server) runCase(w http.ResponseWriter, r *http.Request, tid string) {
 	cid := r.PathValue("id")
-	var projectID, scenario, datasetID, dataRowID string
+	var projectID, datasetID, dataRowID, generationMode, caseStatus string
 	err := s.st.DB.QueryRow(
-		"SELECT project_id, scenario, dataset_id, data_row_id FROM cases WHERE id = ? AND tenant_id = ?", cid, tid,
-	).Scan(&projectID, &scenario, &datasetID, &dataRowID)
+		"SELECT project_id, dataset_id, data_row_id, generation_mode, status FROM cases WHERE id = ? AND tenant_id = ?", cid, tid,
+	).Scan(&projectID, &datasetID, &dataRowID, &generationMode, &caseStatus)
 	if err == sql.ErrNoRows {
 		fail(w, http.StatusNotFound, "用例不存在")
 		return
@@ -20,12 +27,28 @@ func (s *Server) runCase(w http.ResponseWriter, r *http.Request, tid string) {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if generationMode == "sampling" && caseStatus != "approved" {
+		fail(w, http.StatusConflict, "模型生成的用例须人工定稿后运行")
+		return
+	}
 	var body struct {
 		VersionID string `json:"version_id"`
 		DatasetID string `json:"dataset_id"`
 		DataRowID string `json:"data_row_id"`
 	}
 	_ = decode(r, &body)
+	if body.VersionID != "" {
+		var one int
+		err := s.st.DB.QueryRowContext(r.Context(), "SELECT 1 FROM versions WHERE id = ? AND tenant_id = ? AND project_id = ?", body.VersionID, tid, projectID).Scan(&one)
+		if err == sql.ErrNoRows {
+			fail(w, http.StatusBadRequest, "版本不存在或不属于当前项目")
+			return
+		}
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "无法验证执行版本")
+			return
+		}
+	}
 	if body.DatasetID != "" || body.DataRowID != "" {
 		datasetID, dataRowID = body.DatasetID, body.DataRowID
 	}
@@ -53,33 +76,55 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request, tid string) {
 }
 
 func (s *Server) getRun(w http.ResponseWriter, r *http.Request, tid string) {
-	rows, _ := s.st.DB.Query(`SELECT r.*, c.name AS case_name, c.scenario
+	rows, err := s.st.DB.Query(`SELECT r.*, c.name AS case_name, c.type AS case_type, c.scenario,
+		COALESCE(e.steps_json, '[]') AS steps
 		FROM runs r JOIN cases c ON c.id = r.case_id
+		LEFT JOIN run_step_evidence e ON e.run_id = r.id AND e.tenant_id = r.tenant_id
 		WHERE r.id = ? AND r.tenant_id = ?`, r.PathValue("id"), tid)
-	out, _ := rowsToMaps(rows)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out, err := rowsToMaps(rows)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if len(out) == 0 {
 		fail(w, http.StatusNotFound, "执行记录不存在")
 		return
 	}
+	out[0]["steps"] = json.RawMessage(out[0]["steps"].(string))
 	write(w, http.StatusOK, out[0])
 }
 
 // heartbeat 供执行端领取与续租；返回待执行任务（首版按租户取最早 queued）。
 func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, tid string) {
-	var rid string
-	err := s.st.DB.QueryRow(`SELECT id FROM runs WHERE tenant_id = ? AND status = 'queued'
-		ORDER BY started_at, rowid LIMIT 1`, tid).Scan(&rid)
+	rid, err := s.claimQueuedRun(r.Context(), tid)
 	if err == sql.ErrNoRows {
 		write(w, http.StatusOK, map[string]any{"run": nil})
 		return
 	}
-	_, _ = s.st.DB.Exec("UPDATE runs SET status = 'running' WHERE id = ?", rid)
-	rows, _ := s.st.DB.Query(`SELECT r.id AS run_id, r.case_id, r.version_id, r.dataset_id, r.data_row_id,
-		c.name, c.type, c.scenario, p.base_url, COALESCE(tdr.values_json, '{}') AS data_json
-		FROM runs r JOIN cases c ON c.id = r.case_id JOIN projects p ON p.id = c.project_id
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法领取执行任务")
+		return
+	}
+	rows, err := s.st.DB.Query(`SELECT r.id AS run_id, r.case_id, r.version_id, r.dataset_id, r.data_row_id,
+		c.name, c.type, c.scenario, c.project_id, COALESCE(e.base_url, p.base_url) AS base_url, COALESCE(tdr.values_json, '{}') AS data_json
+		FROM runs r JOIN cases c ON c.id = r.case_id AND c.tenant_id = r.tenant_id
+		JOIN projects p ON p.id = c.project_id AND p.tenant_id = c.tenant_id
+		LEFT JOIN environments e ON e.id = c.environment_id AND e.project_id = c.project_id AND e.tenant_id = c.tenant_id
 		LEFT JOIN test_data_records tdr ON tdr.id = r.data_row_id AND tdr.dataset_id = r.dataset_id AND tdr.tenant_id = r.tenant_id
 		WHERE r.id = ? AND r.tenant_id = ?`, rid, tid)
-	out, _ := rowsToMaps(rows)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法读取执行任务")
+		return
+	}
+	out, err := rowsToMaps(rows)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法读取执行任务")
+		return
+	}
 	if len(out) == 0 {
 		fail(w, http.StatusNotFound, "执行记录不存在")
 		return
@@ -88,21 +133,31 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, tid string) {
 	_ = json.Unmarshal([]byte(out[0]["data_json"].(string)), &data)
 	delete(out[0], "data_json")
 	out[0]["data"] = data
+	if r.URL.Query().Get("knowledge") == "requirements" && out[0]["type"] == "ui" {
+		projectID := out[0]["project_id"].(string)
+		if rows, err := s.st.DB.QueryContext(r.Context(), `SELECT id, title, content FROM requirements
+			WHERE tenant_id = ? AND project_id = ? AND status = 'open' ORDER BY id`, tid, projectID); err == nil {
+			if requirements, err := rowsToMaps(rows); err == nil {
+				out[0]["knowledge_context"] = map[string]any{"tenant_id": tid, "project_id": projectID, "requirements": requirements}
+			}
+		}
+	}
 	write(w, http.StatusOK, map[string]any{"run": out[0]})
 }
 
 func (s *Server) finishRun(w http.ResponseWriter, r *http.Request, tid string) {
 	var b struct {
-		Status      string `json:"status"`
-		Passed      bool   `json:"passed"`
-		NeedsReview bool   `json:"needs_review"`
-		SelfHealed  bool   `json:"self_healed"`
-		TokenIn     int    `json:"token_in"`
-		TokenOut    int    `json:"token_out"`
-		DurationMS  int    `json:"duration_ms"`
-		Report      string `json:"report"`
-		FallbackReason string `json:"fallback_reason"`
-		FailureSigs []struct {
+		Status         string    `json:"status"`
+		Passed         bool      `json:"passed"`
+		NeedsReview    bool      `json:"needs_review"`
+		SelfHealed     bool      `json:"self_healed"`
+		TokenIn        int       `json:"token_in"`
+		TokenOut       int       `json:"token_out"`
+		DurationMS     int       `json:"duration_ms"`
+		Report         string    `json:"report"`
+		FallbackReason string    `json:"fallback_reason"`
+		Steps          []runStep `json:"steps"`
+		FailureSigs    []struct {
 			Signature string `json:"signature"`
 			Title     string `json:"title"`
 			Evidence  string `json:"evidence"`
@@ -117,13 +172,40 @@ func (s *Server) finishRun(w http.ResponseWriter, r *http.Request, tid string) {
 		fail(w, http.StatusBadRequest, "请求体无效")
 		return
 	}
+	for index, step := range b.Steps {
+		if step.Number != index+1 || step.Action == "" || step.DurationMS < 0 || (step.Status != "passed" && step.Status != "failed") {
+			fail(w, http.StatusBadRequest, "步骤证据无效")
+			return
+		}
+	}
 	rid := r.PathValue("id")
-	_, err := s.st.DB.Exec(`UPDATE runs SET status = ?, passed = ?, needs_review = ?, self_healed = ?,
-		token_in = ?, token_out = ?, duration_ms = ?, report = ?, fallback_reason = ?, ended_at = datetime('now')
-		WHERE id = ? AND tenant_id = ?`,
-		b.Status, boolInt(b.Passed), boolInt(b.NeedsReview), boolInt(b.SelfHealed),
-		b.TokenIn, b.TokenOut, b.DurationMS, b.Report, b.FallbackReason, rid, tid)
+	tx, err := s.st.DB.BeginTx(r.Context(), nil)
 	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	err = tx.QueryRow(`UPDATE runs SET status = ?, passed = ?, needs_review = ?, self_healed = ?,
+		token_in = ?, token_out = ?, duration_ms = ?, report = ?, fallback_reason = ?, ended_at = datetime('now')
+		WHERE id = ? AND tenant_id = ? RETURNING id`,
+		b.Status, boolInt(b.Passed), boolInt(b.NeedsReview), boolInt(b.SelfHealed),
+		b.TokenIn, b.TokenOut, b.DurationMS, b.Report, b.FallbackReason, rid, tid).Scan(&rid)
+	if err == sql.ErrNoRows {
+		fail(w, http.StatusNotFound, "执行记录不存在")
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(b.Steps) > 0 {
+		if _, err := tx.Exec(`INSERT INTO run_step_evidence (run_id, tenant_id, steps_json) VALUES (?,?,?)
+			ON CONFLICT(tenant_id, run_id) DO UPDATE SET steps_json = excluded.steps_json`, rid, tid, mustJSON(b.Steps)); err != nil {
+			fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}

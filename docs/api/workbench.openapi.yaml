@@ -1,0 +1,241 @@
+openapi: 3.0.3
+info:
+  title: 企业测试工作台
+  version: 1.0.0
+security:
+  - Session: []
+    Workspace: []
+paths:
+  /api/workbench/templates:
+    get:
+      summary: 获取有序模板目录
+      responses:
+        '200':
+          description: 模板列表
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Template' } }
+        default: { $ref: '#/components/responses/Error' }
+  /api/workbench/documents:
+    get:
+      summary: 列出当前租户产物，按更新时间倒序，首版全量返回
+      responses:
+        '200':
+          description: 产物列表
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Document' } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      summary: 创建草稿
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Create' }
+      responses:
+        '201': { $ref: '#/components/responses/Document' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/workbench/documents/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ID'
+    get:
+      summary: 获取产物与当前签核
+      responses:
+        '200': { $ref: '#/components/responses/Document' }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      summary: 整体替换可编辑字段，项目、版本与类型固定
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Edit' }
+      responses:
+        '200': { $ref: '#/components/responses/Document' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/workbench/documents/{id}/review:
+    parameters:
+      - $ref: '#/components/parameters/ID'
+    post:
+      summary: 提审或签核
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action, revision]
+              properties:
+                action: { type: string, enum: [submit, approve, reject] }
+                revision: { type: integer, minimum: 1 }
+                reviewer: { type: string, description: 仅旧测试夹具使用，正式会话由登录用户签核 }
+                note: { type: string, description: 驳回时必填 }
+      responses:
+        '200': { $ref: '#/components/responses/Document' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/workbench/documents/{id}/export:
+    parameters:
+      - $ref: '#/components/parameters/ID'
+    get:
+      summary: 下载已批准版本的 HTML
+      responses:
+        '200':
+          description: UTF-8 HTML 附件，文件名为类型和 ID
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            text/html:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    Session:
+      type: http
+      scheme: bearer
+    Workspace:
+      type: apiKey
+      in: header
+      name: X-Tenant-Id
+      description: 现有工作区定位头，由会话确认成员权限。
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    Document:
+      description: 当前持久化产物
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Document' }
+    Error:
+      description: 400 参数无效，401/403 共享入口拒绝，404 租户或资源范围外，409 状态或修订冲突，422 未满足提审条件，500 服务异常
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { type: string }
+              missing_sections: { type: array, description: 未满足的模板字段键或检查项键, items: { type: string } }
+  schemas:
+    Kind:
+      type: string
+      enum: [test_application, test_plan, entrance_checklist, peer_review, daily_report, exit_checklist, test_report]
+    Template:
+      type: object
+      required: [kind, label, fields, checks]
+      properties:
+        kind: { $ref: '#/components/schemas/Kind' }
+        label: { type: string }
+        fields:
+          type: array
+          items:
+            type: object
+            required: [key, label, type]
+            properties:
+              key: { type: string }
+              label: { type: string }
+              type: { type: string, enum: [text, textarea, date] }
+        checks:
+          type: array
+          items:
+            type: object
+            required: [key, label]
+            properties:
+              key: { type: string }
+              label: { type: string }
+    Content:
+      type: object
+      required: [title, fields]
+      properties:
+        title: { type: string, minLength: 1 }
+        risk_level: { type: string, enum: ['', P0, P1, P2, P3] }
+        fields:
+          type: object
+          description: 仅允许所选模板目录提供的字段键
+          additionalProperties: { type: string }
+        checks:
+          type: object
+          description: 仅允许所选模板目录提供的检查项键
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            properties:
+              result: { type: string, enum: ['', pass, fail] }
+              evidence: { type: string }
+    Create:
+      allOf:
+        - $ref: '#/components/schemas/Content'
+        - type: object
+          required: [kind, project_id, version_id]
+          properties:
+            kind: { $ref: '#/components/schemas/Kind' }
+            project_id: { type: string, minLength: 1 }
+            version_id: { type: string, minLength: 1 }
+    Edit:
+      allOf:
+        - $ref: '#/components/schemas/Content'
+        - type: object
+          required: [revision]
+          properties:
+            revision: { type: integer, minimum: 1 }
+    Document:
+      allOf:
+        - $ref: '#/components/schemas/Create'
+        - type: object
+          required: [id, revision, status, reviewer, review_note, reviewed_at, created_at, updated_at]
+          properties:
+            id: { type: string }
+            revision: { type: integer, minimum: 1 }
+            status: { type: string, enum: [draft, in_review, approved, rejected] }
+            reviewer: { type: string }
+            review_note: { type: string }
+            reviewed_at: { type: string, description: UTC date-time, unsigned is empty }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+            metrics:
+              description: 日报或总结报告成功提审后提供，驳回重编时清除
+              allOf:
+                - $ref: '#/components/schemas/Metrics'
+    Metrics:
+      type: object
+      required: [case_statistics, requirement_coverage, execution_rate, pass_rate, defect_total, defect_distribution, severity_distribution, residual_defects, started_at, ended_at, requires_human_review]
+      properties:
+        case_statistics:
+          type: object
+          required: [total, executed, passed, failed, blocked]
+          properties:
+            total: { type: integer, minimum: 0 }
+            executed: { type: integer, minimum: 0 }
+            passed: { type: integer, minimum: 0 }
+            failed: { type: integer, minimum: 0 }
+            blocked: { type: integer, minimum: 0 }
+        requirement_coverage:
+          type: object
+          required: [covered, total]
+          properties:
+            covered: { type: integer, minimum: 0 }
+            total: { type: integer, minimum: 0 }
+        execution_rate: { type: number, minimum: 0, maximum: 1 }
+        pass_rate: { type: number, minimum: 0, maximum: 1 }
+        defect_total: { type: integer, minimum: 0 }
+        defect_distribution: { type: object, additionalProperties: { type: integer, minimum: 0 } }
+        severity_distribution: { type: object, additionalProperties: { type: integer, minimum: 0 } }
+        residual_defects:
+          type: array
+          items:
+            type: object
+            required: [code, title, severity, priority, status]
+            properties:
+              code: { type: string }
+              title: { type: string }
+              severity: { type: string }
+              priority: { type: string }
+              status: { type: string }
+        started_at: { type: string }
+        ended_at: { type: string }
+        requires_human_review: { type: boolean }

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+resources="$(cd "$(dirname "$0")/../Resources" && pwd)"
+exec "$resources/python/bin/python3" "$resources/desktop.py" "$@"

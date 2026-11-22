@@ -1,0 +1,37 @@
+x-app: &app
+  image: ${AUTOTEST_IMAGE:-autotest-platform:local}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  restart: unless-stopped
+
+services:
+  control:
+    <<: *app
+    ports:
+      - "127.0.0.1:${AUTOTEST_PORT:-8090}:8090"
+    volumes:
+      - control-data:/state
+    healthcheck:
+      test: [CMD, python, -c, "import http.client; c=http.client.HTTPConnection('127.0.0.1',8090,timeout=2); c.request('GET','/api/tenants'); raise SystemExit(c.getresponse().status != 401)"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+  worker:
+    <<: *app
+    profiles: [worker]
+    depends_on:
+      control:
+        condition: service_healthy
+    environment:
+      - PLATFORM_WORKER_TOKEN
+      - PLATFORM_WORKER_CACHE_DIR=/state/cache
+    command: [python, -m, agents.worker_credentials, --server, 'http://control:8090']
+    init: true
+    shm_size: 256mb
+    volumes:
+      - worker-data:/state
+
+volumes:
+  control-data:
+  worker-data:

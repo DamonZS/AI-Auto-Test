@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
 import DataTable from '../components/DataTable.vue'
+import CoveragePanel from '../components/CoveragePanel.vue'
 
 const rows = ref([])
 const projects = ref([])
@@ -68,6 +69,7 @@ onMounted(load)
       <span v-for="t in impactTags(row.impact_json)" :key="t" class="chip">{{ t }}</span>
     </template>
   </DataTable>
+  <CoveragePanel :versions="rows.filter((row) => row.project_id === projectId)" />
 </template>
 
 <style scoped>

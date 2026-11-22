@@ -273,8 +273,8 @@ func (s *Server) enqueueScheduledSuite(tid, suiteID, runID string, now time.Time
 		return false
 	}
 	defer tx.Rollback()
-	result, err := tx.Exec(`INSERT INTO suite_runs (id, tenant_id, suite_id)
-		SELECT ?, suite.tenant_id, suite.id FROM suites suite JOIN suite_schedules schedule
+	result, err := tx.Exec(`INSERT INTO suite_runs (id, tenant_id, suite_id, max_concurrency)
+		SELECT ?, suite.tenant_id, suite.id, suite.max_concurrency FROM suites suite JOIN suite_schedules schedule
 		ON schedule.suite_id = suite.id AND schedule.tenant_id = suite.tenant_id
 		WHERE suite.id = ? AND suite.tenant_id = ? AND schedule.enabled = 1
 		AND schedule.weekday = ? AND schedule.hour = ? AND schedule.minute = ?

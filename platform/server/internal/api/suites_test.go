@@ -17,9 +17,11 @@ func TestSuiteRunColumnMigratesExistingStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := legacy.DB.Exec(`ALTER TABLE runs DROP COLUMN suite_run_id;
+	if _, err := legacy.DB.Exec(`DROP INDEX idx_runs_batch_status;
+		ALTER TABLE runs DROP COLUMN suite_run_id;
 		DROP TABLE suite_runs;
 		ALTER TABLE suites DROP COLUMN case_ids;
+		ALTER TABLE suites DROP COLUMN max_concurrency;
 		INSERT INTO suites (id, tenant_id, name) VALUES ('old-suite', 'tenant-a', 'Old Suite');
 		INSERT INTO tenants (id, name) VALUES ('tenant-a', 'Tenant A');
 		INSERT INTO runs (id, tenant_id, case_id, version_id) VALUES ('old-run', 'tenant-a', 'case-a', 'version-a')`); err != nil {
@@ -41,7 +43,7 @@ func TestSuiteRunColumnMigratesExistingStore(t *testing.T) {
 	if versionID != "version-a" || suiteRunID != "" {
 		t.Fatalf("migrated run version_id = %q, suite_run_id = %q", versionID, suiteRunID)
 	}
-	if response := serveTenant(New(st).Routes(), http.MethodGet, "/api/suites", "tenant-a", nil); response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"case_ids":[]`)) {
+	if response := serveTenant(New(st).Routes(), http.MethodGet, "/api/suites", "tenant-a", nil); response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"case_ids":[]`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"max_concurrency":1`)) {
 		t.Fatalf("list migrated suites status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
@@ -62,13 +64,14 @@ func TestSuiteCreateListAndRunSummariesAreTenantScoped(t *testing.T) {
 		t.Fatalf("create suite status = %d, body = %s", response.Code, response.Body.String())
 	}
 	var created struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+		ID             string `json:"id"`
+		Name           string `json:"name"`
+		MaxConcurrency int    `json:"max_concurrency"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.ID == "" || created.Name != "smoke" {
+	if created.ID == "" || created.Name != "smoke" || created.MaxConcurrency != 1 {
 		t.Fatalf("unexpected created suite: %#v", created)
 	}
 
@@ -84,6 +87,17 @@ func TestSuiteCreateListAndRunSummariesAreTenantScoped(t *testing.T) {
 	}
 	if response.Code != http.StatusOK || len(suites) != 1 || suites[0]["name"] != "smoke" {
 		t.Fatalf("tenant-a suites = status %d, %#v", response.Code, suites)
+	}
+	suitePath := "/api/suites/" + created.ID
+	for _, body := range []string{`{}`, `{"max_concurrency":0}`, `{"max_concurrency":-1}`, `{"max_concurrency":1.5}`, `{"max_concurrency":"2"}`} {
+		response := serveTenant(h, http.MethodPatch, suitePath, "tenant-a", []byte(body))
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid concurrency %s: %d %s", body, response.Code, response.Body.String())
+		}
+	}
+	response = serveTenant(h, http.MethodPatch, suitePath, "tenant-b", []byte(`{"max_concurrency":2}`))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("update foreign suite concurrency: %d %s", response.Code, response.Body.String())
 	}
 
 	response = serveTenant(h, http.MethodPost, "/api/suites/"+created.ID+"/run", "tenant-a", []byte(`{"case_ids":["case-c","case-a"]}`))
