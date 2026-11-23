@@ -1,20 +1,20 @@
-# Auto-Test
+# AI-Auto-Test
 
 [English](README.md) · 简体中文
 
-Auto-Test 是一个软件测试工作台，用于从需求整理测试用例、审核并定稿、执行测试，以及追踪运行报告和缺陷。AI 可以辅助分析需求和生成用例草稿，测试结果由自动化断言或人工验证决定。
+AI-Auto-Test 是一个 AI 辅助的软件测试工作台，用于从需求整理测试用例、审核并定稿、执行测试，以及追踪运行报告和缺陷。AI 可以辅助分析需求和生成用例草稿，测试结果由自动化断言或人工验证决定。
 
 ## 下载与安装
 
-安装包和发布说明见 [GitHub Releases](https://github.com/DamonZS/Auto-Test/releases/latest)。
+安装包和发布说明见 [GitHub Releases](https://github.com/DamonZS/AI-Auto-Test/releases/latest)。
 
 | 平台 | 下载 | 安装方式 |
 | --- | --- | --- |
-| Windows x64 | [安装程序 `.exe`](https://github.com/DamonZS/Auto-Test/releases/latest/download/Auto-Test-windows-x64-setup.exe) | 运行安装程序，再从开始菜单打开 Auto-Test。 |
-| macOS Apple Silicon | [磁盘映像 `.dmg`](https://github.com/DamonZS/Auto-Test/releases/latest/download/Auto-Test-macos-arm64.dmg) | 打开映像，把 `Auto-Test.app` 拖入「应用程序」。 |
-| Linux amd64 | [Docker 镜像归档 `.tar.gz`](https://github.com/DamonZS/Auto-Test/releases/latest/download/Auto-Test-linux-amd64.tar.gz) | 用 `docker load -i` 导入，再按部署指南使用 Docker Compose 启动。 |
+| Windows x64 | [安装程序 `.exe`](https://github.com/DamonZS/AI-Auto-Test/releases/latest/download/Auto-Test-windows-x64-setup.exe) | 运行安装程序，再从开始菜单打开 Auto-Test。 |
+| macOS Apple Silicon | [磁盘映像 `.dmg`](https://github.com/DamonZS/AI-Auto-Test/releases/latest/download/Auto-Test-macos-arm64.dmg) | 打开映像，把 `Auto-Test.app` 拖入「应用程序」。 |
+| Linux amd64 | [Docker 镜像归档 `.tar.gz`](https://github.com/DamonZS/AI-Auto-Test/releases/latest/download/Auto-Test-linux-amd64.tar.gz) | 用 `docker load -i` 导入，再按部署指南使用 Docker Compose 启动。 |
 
-下载后可对照 [SHA256SUMS.txt](https://github.com/DamonZS/Auto-Test/releases/latest/download/SHA256SUMS.txt) 校验文件。桌面首次启动时创建工作区和账户，再由工作区所有者在「设置 → 桌面 Worker」激活执行器。在设置中配置 OpenAI 兼容模型即可启用 AI 生成与定位恢复。Linux 初始化和凭据配置见 [部署指南](docs/deployment/README.md)。
+下载后可对照 [SHA256SUMS.txt](https://github.com/DamonZS/AI-Auto-Test/releases/latest/download/SHA256SUMS.txt) 校验文件。桌面首次启动时创建工作区和账户，再由工作区所有者在「设置 → 桌面 Worker」激活执行器。在设置中配置 OpenAI 兼容模型即可启用 AI 生成与定位恢复。Linux 初始化和凭据配置见 [部署指南](docs/deployment/README.md)。
 
 ## 从需求到测试结果
 

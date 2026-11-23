@@ -1,8 +1,8 @@
-# Auto-Test
+# AI-Auto-Test
 
-[简体中文](README.zh-CN.md) · [Downloads](https://github.com/DamonZS/Auto-Test/releases/latest) · [MIT License](LICENSE)
+[简体中文](README.zh-CN.md) · [Downloads](https://github.com/DamonZS/AI-Auto-Test/releases/latest) · [MIT License](LICENSE)
 
-Auto-Test is an AI-assisted QA workbench for teams. It links requirements, versions, environments, test data, cases, runs, and defects in one workspace. Run it as a Windows or macOS desktop app, or deploy the web workbench and workers on Linux.
+AI-Auto-Test is an AI-assisted QA workbench for teams. It links requirements, versions, environments, test data, cases, runs, and defects in one workspace. Run it as a Windows or macOS desktop app, or deploy the web workbench and workers on Linux.
 
 ## What you can do
 
@@ -16,9 +16,9 @@ Auto-Test is an AI-assisted QA workbench for teams. It links requirements, versi
 
 | Platform | Package |
 | --- | --- |
-| Windows x64 | [`.exe` installer](https://github.com/DamonZS/Auto-Test/releases/latest/download/Auto-Test-windows-x64-setup.exe) |
-| macOS Apple Silicon | [`.dmg` disk image](https://github.com/DamonZS/Auto-Test/releases/latest/download/Auto-Test-macos-arm64.dmg) |
-| Linux amd64 | [Docker image archive](https://github.com/DamonZS/Auto-Test/releases/latest/download/Auto-Test-linux-amd64.tar.gz) |
+| Windows x64 | [`.exe` installer](https://github.com/DamonZS/AI-Auto-Test/releases/latest/download/Auto-Test-windows-x64-setup.exe) |
+| macOS Apple Silicon | [`.dmg` disk image](https://github.com/DamonZS/AI-Auto-Test/releases/latest/download/Auto-Test-macos-arm64.dmg) |
+| Linux amd64 | [Docker image archive](https://github.com/DamonZS/AI-Auto-Test/releases/latest/download/Auto-Test-linux-amd64.tar.gz) |
 
 Open the desktop app and create a workspace and owner account. In Settings, activate the Desktop Worker for the workspace. Configure an OpenAI-compatible model in Settings to enable AI generation and locator recovery. For Docker Compose setup, local builds, data paths, and upgrade instructions, see the [deployment guide](docs/deployment/README.md).
 

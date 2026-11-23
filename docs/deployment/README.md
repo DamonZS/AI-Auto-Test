@@ -1,8 +1,8 @@
-# Auto-Test 部署
+# AI-Auto-Test 部署
 
 构建依赖正式认证实现及 `agents/worker_credentials.py`。推送到 `main` 或手动运行发布流水线后，Linux、Windows x64 与 macOS arm64 runner 运行安装或启动验收，再上传各平台产物。现有数据库迁移见 [租户认证说明](../api/auth-migration.md)。
 
-推送 `vX.Y.Z` 标签后，三平台全部通过才会发布到 [GitHub Releases](https://github.com/DamonZS/Auto-Test/releases)。构建会一并发布安装包和 `SHA256SUMS.txt`。如提交中带有 `docs/releases/vX.Y.Z.md`，发布页使用该说明，否则使用 GitHub 生成的变更摘要。
+推送 `vX.Y.Z` 标签后，三平台全部通过才会发布到 [GitHub Releases](https://github.com/DamonZS/AI-Auto-Test/releases)。构建会一并发布安装包和 `SHA256SUMS.txt`。如提交中带有 `docs/releases/vX.Y.Z.md`，发布页使用该说明，否则使用 GitHub 生成的变更摘要。
 
 ## Linux 服务端
 
