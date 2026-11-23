@@ -67,6 +67,7 @@ const viewProps = computed(() => {
   if (current.value === 'runs') return { ...scope, selectedRun: selectedRun.value }
   if (current.value === 'cases') return { ...scope, generationTarget: generationTarget.value, selectedCase: selectedCase.value }
   if (current.value === 'patches') return { selectedRun: selectedRun.value }
+  if (current.value === 'settings') return { canEdit: memberships.value.some((item) => item.id === tenantId.value && item.role === 'owner') }
   return projectPages.has(current.value) ? scope : {}
 })
 
@@ -228,7 +229,10 @@ async function createWorkspace() {
   error.value = ''
   try {
     const workspace = await api.post('/api/tenants', { name: draft.value.trim() || '新租户' })
-    if (signedIn.value) enter(workspace.id)
+    if (signedIn.value) {
+      memberships.value.push({ ...workspace, role: 'owner' })
+      enter(workspace.id)
+    }
   } catch (err) {
     if (signedIn.value) error.value = err.message
   } finally {
@@ -310,7 +314,7 @@ function leave() {
       <ProjectJourney v-if="projectId && projectPages.has(current)" :page="current" @navigate="switchTo" />
       <div :key="viewKey" class="workbench-page">
         <component :is="view.comp" v-bind="viewProps" @open-run="openRun" @generate-cases="generateCases"
-          @open-project="openProject" @open-project-view="openProjectView" @open-case-history="openCaseHistory" @projects-changed="refreshProjects" />
+          @open-project="openProject" @open-project-view="openProjectView" @open-case-history="openCaseHistory" @projects-changed="refreshProjects" @open-mcp="switchTo('mcp')" />
       </div>
     </main>
   </div>

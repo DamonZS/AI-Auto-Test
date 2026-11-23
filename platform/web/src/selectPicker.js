@@ -26,6 +26,7 @@ export function installSelectPicker() {
     if (!select) return
     watchAnchor.disconnect()
     picker.hidePopover()
+    picker.remove()
     select.removeAttribute('aria-expanded')
     select.removeAttribute('aria-controls')
     select.removeAttribute('aria-activedescendant')

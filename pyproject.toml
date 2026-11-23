@@ -8,5 +8,5 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "auto_ai"
-version = "0.1.6"
+version = "0.1.7"
 description = "LangGraph + Playwright 自动化测试框架"

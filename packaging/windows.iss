@@ -1,7 +1,7 @@
 [Setup]
 AppId=Auto-Test.Desktop
 AppName=Auto-Test
-AppVersion=0.1.6
+AppVersion=0.1.7
 DefaultDirName={localappdata}\Programs\Auto-Test
 DefaultGroupName=Auto-Test
 PrivilegesRequired=lowest

@@ -149,7 +149,7 @@ onMounted(load)
     <p v-if="notice" class="hub-notice" role="status">{{ notice }}</p>
 
     <div class="project-layout" :class="{ split: selectedId }">
-      <section class="hub-panel project-list" aria-label="项目列表">
+      <section class="project-list" aria-label="项目列表">
         <p v-if="loading" role="status">正在读取项目…</p>
         <p v-else-if="!filtered.length">{{ query.trim() || lifecycleFilter ? '没有匹配的项目' : '还没有项目' }}</p>
         <ul v-else>
@@ -205,10 +205,11 @@ onMounted(load)
 <style scoped src="./project-hubs.css"></style>
 <style scoped>
 .project-layout { display: grid; gap: 14px; }
-.project-layout.split { grid-template-columns: minmax(200px, 1fr) minmax(0, 2fr); align-items: start; }
-.project-list ul { list-style: none; padding: 0; margin: 0; }
-.project-list li + li { border-top: 1px solid var(--line); }
-.project-row { display: grid; gap: 2px; width: 100%; text-align: start; border-color: transparent; overflow-wrap: anywhere; }
+.project-layout.split { grid-template-columns: minmax(0, 16rem) minmax(0, 1fr); align-items: start; }
+.project-list { min-inline-size: 0; }
+.project-list p { margin: 0; color: var(--muted); }
+.project-list ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 16rem)); gap: 10px; list-style: none; padding: 0; margin: 0; }
+.project-row { display: grid; align-content: start; gap: 4px; inline-size: 100%; block-size: 100%; padding: 10px 12px; text-align: start; overflow-wrap: anywhere; }
 .project-row span { color: var(--muted); }
 .project-row[aria-pressed='true'] { border-color: var(--accent); background: #eef1fe; }
 .project-detail { display: grid; gap: 16px; }
