@@ -1,0 +1,95 @@
+openapi: 3.0.3
+info:
+  title: 桌面首次注册
+  version: 1.0.0
+  description: |
+    Go 服务须以 -desktop-setup 显式启用，-addr 须为 IPv4 或 IPv6 loopback IP 字面量和端口。
+    启用时，TCP 本地地址、对端地址及 HTTP Host 均须为 loopback IP，转发头不参与判定。
+    此路由不提供 CORS。GET 可省略 Origin，提供时须同源。POST 必须带同源 Origin。
+    无 Origin 的本机 CLI 可继续用 -provision-user 配置账号及现有工作区。
+    所有响应均带 Cache-Control: no-store。
+paths:
+  /api/auth/setup:
+    get:
+      summary: 查询桌面首次注册是否可用
+      security: []
+      responses:
+        '200':
+          description: 启用且尚无认证身份时为 true。未启用或已有任意认证身份时为 false。
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [available]
+                properties:
+                  available: { type: boolean }
+        '403': { $ref: '#/components/responses/Denied' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      summary: 原子创建首个认证身份及其新工作区
+      description: |
+        只在尚无认证身份时创建一个 owner 和一个新工作区。已有工作区保留且成员关系不变。
+        密码沿用现有认证哈希。客户端收到 201 后调用 POST /api/auth/login 获取 Web token。
+      security: []
+      parameters:
+        - name: Origin
+          in: header
+          required: true
+          description: 与请求的协议、IP 及端口同源。
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspace_name, username, password]
+              properties:
+                workspace_name: { type: string, minLength: 1, maxLength: 128, x-maxUtf8Bytes: 128, description: 去除首尾空白后校验。 }
+                username: { type: string, minLength: 1, maxLength: 128, x-maxUtf8Bytes: 128, description: 去除首尾空白后校验。 }
+                password: { type: string, format: password, maxLength: 1024, x-minUtf8Bytes: 12, x-maxUtf8Bytes: 1024, description: 12–1024 个 UTF-8 字节。 }
+      responses:
+        '201':
+          description: 新工作区已创建。
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workspace_id]
+                properties:
+                  workspace_id: { type: string }
+        '400':
+          description: 请求体须是 8192 字节以内的有效 JSON 对象，各字段须符合约束。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403': { $ref: '#/components/responses/Denied' }
+        '404':
+          description: 未启用桌面首次注册。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: 请求体有效，但已有认证身份，包括其他请求刚创建成功的情况。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/InternalError' }
+components:
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+  responses:
+    Denied:
+      description: 请求未通过 loopback 或同源校验。
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InternalError:
+      description: 无法查询注册状态或创建身份及工作区。
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

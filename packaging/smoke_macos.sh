@@ -26,12 +26,11 @@ server="http://127.0.0.1:$port"
 mkdir "$data"
 export PLATFORM_AUTH_USERNAME=deployment-smoke
 export PLATFORM_AUTH_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_hex(20))')"
-"$scratch/Auto-Test.app/Contents/Resources/autotest-server" \
-    -db "$data/platform.db" -provision-user -auth-tenant deployment-smoke -auth-tenant-name 'Deployment smoke'
+payload="$scratch/Auto-Test.app/Contents/Resources"
 env -u PLATFORM_AUTH_USERNAME -u PLATFORM_AUTH_PASSWORD -u PLATFORM_WORKER_TOKEN \
     "$launcher" --data-dir "$data" --port "$port" --no-browser &
 desktop_pid=$!
-fixture="$(python3 deploy/smoke.py "$server" prepare --worker-token-file "$data/worker-token.txt")"
+fixture="$("$payload/python/bin/python3" deploy/smoke.py "$server" prepare --desktop-payload "$payload" --worker-token-file "$data/worker-token.txt")"
 tenant="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tenant"])' <<< "$fixture")"
 run="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["run"])' <<< "$fixture")"
 python3 deploy/smoke.py "$server" check "$tenant" "$run" || { cat "$data/desktop.log"; exit 1; }

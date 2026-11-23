@@ -13,6 +13,7 @@ from urllib.request import urlretrieve
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = "20261110"
+PYSIDE_VERSION = "6.10.2"
 RUNTIMES = {
     ("Windows", "AMD64"): ("x86_64-pc-windows-msvc", "2e0fed09d48989f64c9305da9ff2d37a41c0d13ab2aa6283405b2b620dfbf805"),
     ("Darwin", "arm64"): ("aarch64-apple-darwin", "7a2384641584ab9984221fcb0fc9265df465922af71be71410529e2a9c3f0540"),
@@ -54,7 +55,7 @@ def stage(payload, scratch, windows):
 
     site = payload / "site"
     run(sys.executable, "-m", "pip", "install", "--only-binary=:all:", "--no-compile", "--target", site,
-        "-r", ROOT / "deploy/worker-requirements.txt")
+        "-r", ROOT / "deploy/worker-requirements.txt", f"PySide6=={PYSIDE_VERSION}")
     python = payload / ("python/python.exe" if windows else "python/bin/python3")
     run(python, "-m", "playwright", "install", "--only-shell", "chromium", env={
         **os.environ, "PYTHONPATH": str(site), "PLAYWRIGHT_BROWSERS_PATH": str(payload / "browsers"),
@@ -63,7 +64,9 @@ def stage(payload, scratch, windows):
         (payload / package).mkdir()
         for source in (ROOT / package).glob("*.py"):
             shutil.copy2(source, payload / package / source.name)
-    shutil.copy2(ROOT / "packaging/desktop.py", payload)
+    bundle_icon = "app-icon.ico" if windows else "app-icon.icns"
+    for name in ("desktop.py", "desktop_window.py", "app-icon.png", bundle_icon):
+        shutil.copy2(ROOT / "packaging" / name, payload)
 
 
 def build(output, iscc):

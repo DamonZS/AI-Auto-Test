@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Installer)
+param([Parameter(Mandatory)][string]$Installer, [switch]$NativeWindow)
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
@@ -24,15 +24,8 @@ try {
     }
     if ($forbidden) { throw "Unexpected installed files: $($forbidden.Name -join ', ')" }
     $null = New-Item -ItemType Directory -Path $data
-    $database = Join-Path $data 'platform.db'
     $env:PLATFORM_AUTH_USERNAME = 'deployment-smoke'
     $env:PLATFORM_AUTH_PASSWORD = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(20))
-    $provisionLog = Join-Path $scratch 'provision.log'
-    $provision = Start-Process -FilePath (Join-Path $install 'autotest-server.exe') -ArgumentList "-db `"$database`" -provision-user -auth-tenant deployment-smoke -auth-tenant-name `"Deployment smoke`"" -RedirectStandardError $provisionLog -WindowStyle Hidden -Wait -PassThru
-    if ($provision.ExitCode -ne 0) {
-        Get-Content -LiteralPath $provisionLog
-        throw "Owner provisioning failed with exit code $($provision.ExitCode)"
-    }
 
     $socket = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $socket.Start()
@@ -40,11 +33,29 @@ try {
     $socket.Stop()
     $server = "http://127.0.0.1:$port"
     $launcher = Join-Path $install 'desktop.py'
-    $options = "`"$launcher`" --data-dir `"$data`" --port $port --no-browser"
+    $options = "`"$launcher`" --data-dir `"$data`" --port $port"
+    if (-not $NativeWindow) { $options += ' --no-browser' }
     $desktop = Start-Process -FilePath $runtime -ArgumentList $options -Environment @{ PLATFORM_WORKER_TOKEN = ''; PLATFORM_AUTH_PASSWORD = ''; PLATFORM_AUTH_USERNAME = '' } -WindowStyle Hidden -PassThru
     $smoke = Join-Path $PSScriptRoot '../deploy/smoke.py'
-    $fixture = python $smoke $server prepare --worker-token-file (Join-Path $data 'worker-token.txt') | ConvertFrom-Json
+    $fixture = & (Join-Path $install 'python/python.exe') $smoke $server prepare --desktop-payload $install --worker-token-file (Join-Path $data 'worker-token.txt') | ConvertFrom-Json
     python $smoke $server check $fixture.tenant $fixture.run
+    if ($NativeWindow) {
+        $desktop.Refresh()
+        if ($desktop.MainWindowTitle -ne 'Auto-Test') { throw 'Auto-Test native window was not created' }
+        if (-not $desktop.CloseMainWindow()) { throw 'Native window could not be closed' }
+        Start-Sleep -Milliseconds 750
+        $desktop.Refresh()
+        if ($desktop.HasExited -or $desktop.MainWindowHandle -ne 0) { throw 'Native window did not hide to tray' }
+        $reopen = Start-Process -FilePath $runtime -ArgumentList $options -WindowStyle Hidden -Wait -PassThru
+        if ($reopen.ExitCode -ne 0) { throw 'Could not request that the window reopen' }
+        for ($attempt = 0; $attempt -lt 12; $attempt++) {
+            Start-Sleep -Milliseconds 250
+            $desktop.Refresh()
+            if ($desktop.MainWindowTitle -eq 'Auto-Test') { break }
+        }
+        if ($desktop.MainWindowTitle -ne 'Auto-Test') { throw 'Native window was not restored' }
+        'Windows native window, close to tray, and restore passed'
+    }
     foreach ($file in 'platform.db', 'platform.db.key') {
         if (-not (Test-Path -LiteralPath (Join-Path $data $file))) { throw "Missing runtime file $file" }
     }

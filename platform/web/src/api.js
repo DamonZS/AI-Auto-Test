@@ -10,7 +10,7 @@ function clearSession() {
   tenantId = ''
 }
 
-async function request(path, options = {}, authenticated = true, download = false) {
+async function request(path, options = {}, authenticated = true, responseType = 'json') {
   const token = authenticated ? sessionToken : ''
   const res = await fetch(path, {
     ...options,
@@ -29,13 +29,22 @@ async function request(path, options = {}, authenticated = true, download = fals
     const body = await res.text()
     let detail
     try { detail = JSON.parse(body) } catch { detail = null }
-    throw Object.assign(new Error(detail?.error || body.slice(0, 200) || res.statusText), { detail })
+    throw Object.assign(new Error(detail?.error || body.slice(0, 200) || res.statusText), { detail, status: res.status })
   }
-  if (download) return res.blob()
-  return res.status === 204 ? undefined : res.json()
+  if (responseType === 'blob') return res.blob()
+  return res.status === 204 || responseType === 'none' ? undefined : res.json()
 }
 
 export const api = {
+  async getSetup() {
+    try {
+      return await request('/api/auth/setup', {}, false)
+    } catch (err) {
+      if (err.status === 404) return { available: false }
+      throw err
+    }
+  },
+  setup: (body) => request('/api/auth/setup', { method: 'POST', body: JSON.stringify(body) }, false, 'none'),
   async login(credentials) {
     const { token } = await request('/api/auth/login', {
       method: 'POST', body: JSON.stringify(credentials),
@@ -47,7 +56,7 @@ export const api = {
     clearSession()
   },
   get: (path) => request(path),
-  download: (path) => request(path, {}, true, true),
+  download: (path) => request(path, {}, true, 'blob'),
   post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
   patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) }),
   put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),

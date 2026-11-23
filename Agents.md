@@ -645,3 +645,9 @@ coding agent 提交代码变更
 - 本地验证包括 Go 56 项、Python 无模型密钥回归 102 项、Chroma 专项 5 项、Vue 生产构建、Microsoft Edge 复杂表单真实回放。Python 回归中的 5 项跳过包括 4 项已在独立 Chroma 环境通过的用例，以及 1 项需显式配置外部站点工作簿的用例。
 - 交付产物为 Windows x64 EXE、macOS arm64 DMG 和 Linux amd64 容器归档。桌面交付当前适用内部验收，Windows 签名及 macOS 公证待正式发布配置。首次启动及旧库迁移流程见 `docs/deployment/README.md`。
 - 待接入项包括实际 coding agent 客户端的 Sampling 联调、ego 和 JEV 增强档、工作台直接启动录制、逐步截图、旧工作簿兼容、企业产物的模型生成和更完整的白盒执行。各项以独立实测证据更新状态。
+
+## 桌面窗口与 GitHub 发布（2026-11-23）
+
+- Windows 与 macOS 安装版通过独立应用窗口承载工作台，随包提供 Qt WebEngine。应用窗口、开始菜单、托盘和 macOS 应用包使用 Auto-Test 图标。关闭窗口收起到托盘，从托盘菜单退出会停止本机控制面与 worker。Windows 停止快捷方式显示实际停止结果。
+- 桌面首次打开时在窗口内创建工作区管理员。桌面控制面以本机回环地址启动并开启注册，首个管理员创建后回到常规登录流程。容器部署通过既有命令预配账号。
+- 推送 `vX.Y.Z` 标签时运行 Linux、Windows 和 macOS 构建与验收。发布任务在三平台通过后收集三个安装包和校验文件，再公开 GitHub Release。对应中文说明置于 `docs/releases/`。

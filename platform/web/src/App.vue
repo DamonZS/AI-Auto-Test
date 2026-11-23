@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, shallowRef } from 'vue'
+import { computed, onMounted, ref, shallowRef } from 'vue'
 import { api, setSessionExpiredHandler, setTenant } from './api'
 import LoginForm from './components/LoginForm.vue'
 import OverviewView from './views/OverviewView.vue'
@@ -33,6 +33,8 @@ const NAV = [
 ]
 
 const signedIn = ref(false)
+const checkingSetup = ref(true)
+const setupAvailable = ref(false)
 const tenantId = ref('')
 const memberships = ref([])
 const selectedTenant = ref('')
@@ -43,6 +45,17 @@ const error = ref('')
 const viewKey = shallowRef(0)
 
 const view = computed(() => NAV.find((n) => n.key === current.value))
+
+onMounted(async () => {
+  try {
+    const { available } = await api.getSetup()
+    setupAvailable.value = available
+  } catch {
+    error.value = '无法检查首次注册状态，请刷新重试'
+  } finally {
+    checkingSetup.value = false
+  }
+})
 
 function switchTo(key) {
   current.value = key
@@ -74,12 +87,17 @@ async function loadMemberships() {
   }
 }
 
-async function login(credentials) {
+async function login({ username, password, workspace_name }) {
   if (busy.value) return
   busy.value = true
   error.value = ''
+  const settingUp = setupAvailable.value
   try {
-    await api.login(credentials)
+    if (settingUp) {
+      await api.setup({ workspace_name, username, password })
+      setupAvailable.value = false
+    }
+    await api.login({ username, password })
   } catch (err) {
     error.value = err.message
     busy.value = false
@@ -87,6 +105,9 @@ async function login(credentials) {
   }
   signedIn.value = true
   await loadMemberships()
+  if (settingUp && signedIn.value && memberships.value.length === 1) {
+    enter(memberships.value[0].id)
+  }
 }
 
 function resetWorkspace() {
@@ -143,7 +164,8 @@ function leave() {
   <div v-if="!signedIn" class="gate">
     <div class="gate-box">
       <h1>测试平台</h1>
-      <LoginForm :busy="busy" :error="error" @login="login" />
+      <p v-if="checkingSetup" role="status">加载中…</p>
+      <LoginForm v-else :setup-mode="setupAvailable" :busy="busy" :error="error" @login="login" />
     </div>
   </div>
 

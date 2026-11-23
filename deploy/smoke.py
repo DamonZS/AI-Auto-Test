@@ -2,13 +2,14 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener, ProxyHandler
 
 
-def prepare(server, browser_url, token_file):
+def prepare(server, browser_url, token_file, desktop_payload=None):
     for attempt in range(60):
         try:
             html = request(server + "/").decode()
@@ -28,6 +29,8 @@ def prepare(server, browser_url, token_file):
     else:
         raise RuntimeError("Production authentication is not enforced")
 
+    if desktop_payload:
+        register_in_desktop_ui(server, desktop_payload)
     web_token = login(server)
     tenants = api(server, "/api/tenants", token=web_token)
     if len(tenants) != 1 or tenants[0]["role"] != "owner" or tenants[0]["name"] != "Deployment smoke":
@@ -50,6 +53,26 @@ def prepare(server, browser_url, token_file):
     }, tenant, web_token)["id"]
     run = api(server, f"/api/cases/{case}/run", "POST", {}, tenant, web_token)["run_id"]
     print(json.dumps({"tenant": tenant, "run": run}))
+
+
+def register_in_desktop_ui(server, payload):
+    sys.path.insert(0, str(payload / "site"))
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(payload / "browsers")
+    from playwright.sync_api import expect, sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.goto(server)
+        page.get_by_label("工作区名称", exact=True).fill("Deployment smoke")
+        page.get_by_label("用户名", exact=True).fill(os.environ["PLATFORM_AUTH_USERNAME"])
+        page.get_by_label("密码", exact=True).fill(os.environ["PLATFORM_AUTH_PASSWORD"])
+        page.get_by_role("button", name="创建工作区", exact=True).click()
+        expect(page.get_by_role("button", name="概览", exact=True)).to_be_visible(timeout=15000)
+        page.reload()
+        expect(page.get_by_role("button", name="登录", exact=True)).to_be_visible(timeout=15000)
+        expect(page.get_by_label("工作区名称", exact=True)).to_have_count(0)
+        browser.close()
 
 
 def check(server, tenant, run):
@@ -94,11 +117,12 @@ if __name__ == "__main__":
     setup = commands.add_parser("prepare")
     setup.add_argument("--browser-url")
     setup.add_argument("--worker-token-file", required=True, type=Path)
+    setup.add_argument("--desktop-payload", type=Path)
     wait = commands.add_parser("check")
     wait.add_argument("tenant")
     wait.add_argument("run")
     args = parser.parse_args()
     if args.command == "prepare":
-        prepare(args.server, args.browser_url or args.server, args.worker_token_file)
+        prepare(args.server, args.browser_url or args.server, args.worker_token_file, args.desktop_payload)
     else:
         check(args.server, args.tenant, args.run)

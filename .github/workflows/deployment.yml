@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   pull_request:
     paths:
       - '.github/workflows/deployment.yml'
@@ -87,3 +88,51 @@ jobs:
           name: ${{ matrix.artifact }}
           path: artifacts/
           if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [linux, desktop]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Auto-Test-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish verified release assets and notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          assets=(Auto-Test-windows-x64-setup.exe Auto-Test-macos-arm64.dmg Auto-Test-linux-amd64.tar.gz)
+          for asset in "${assets[@]}"; do
+            test -s "release-assets/$asset"
+          done
+          (cd release-assets && sha256sum "${assets[@]}" > SHA256SUMS.txt)
+
+          if draft=$(gh release view "$tag" --json isDraft --jq .isDraft); then
+            if [[ "$draft" == false ]]; then
+              echo "$tag is already published"
+              exit 0
+            fi
+          else
+            notes="docs/releases/$tag.md"
+            if [[ -s "$notes" ]]; then
+              gh release create "$tag" --verify-tag --draft --title "Auto-Test $tag" --notes-file "$notes"
+            else
+              gh release create "$tag" --verify-tag --draft --title "Auto-Test $tag" --generate-notes
+            fi
+          fi
+          gh release upload "$tag" "${assets[@]/#/release-assets/}" release-assets/SHA256SUMS.txt --clobber
+          gh release edit "$tag" --draft=false

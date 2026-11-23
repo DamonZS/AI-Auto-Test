@@ -4,7 +4,6 @@ import signal
 import subprocess
 import sys
 import time
-import webbrowser
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, build_opener
@@ -66,15 +65,17 @@ def serve(args, stop_file, log):
                "creationflags": subprocess.CREATE_NO_WINDOW if WINDOWS else 0}
     binary = PAYLOAD / ("autotest-server.exe" if WINDOWS else "autotest-server")
     control = subprocess.Popen([binary, "-addr", f"127.0.0.1:{args.port}", "-db",
-                                "platform.db", "-web", PAYLOAD / "web"], **options)
+                                "platform.db", "-web", PAYLOAD / "web", "-desktop-setup"], **options)
     worker = None
     try:
         if not wait_for_control(control, stop_file, server):
             return
-        if not args.no_browser:
-            webbrowser.open(server)
         print("Waiting for a worker service token", file=log, flush=True)
-        while not stop_file.exists() and control.poll() is None:
+
+        def keep_running():
+            nonlocal worker
+            if stop_file.exists() or control.poll() is not None:
+                return False
             if worker is None or worker.poll() is not None:
                 token = worker_token(args.data_dir)
                 if token:
@@ -85,12 +86,35 @@ def serve(args, stop_file, log):
                     }}
                     worker = subprocess.Popen([python, "-m", "agents.worker_credentials", "--server", server],
                                               **worker_options)
-            time.sleep(2)
+            return True
+
+        if args.no_browser:
+            while keep_running():
+                time.sleep(2)
+        else:
+            sys.path.insert(0, str(PAYLOAD / "site"))
+            from desktop_window import run_desktop_window
+
+            run_desktop_window(server, PAYLOAD / "app-icon.png", args.data_dir / "show.request", keep_running)
     finally:
         for process in (worker, control):
             if process and process.poll() is None:
                 process.terminate()
                 process.wait()
+
+
+def stop_desktop(data_dir):
+    if not data_dir.is_dir():
+        return False
+    with (data_dir / "desktop.lock").open("a+b") as handle:
+        if lock(handle):
+            return False
+        (data_dir / "stop.request").touch()
+        for _ in range(60):
+            time.sleep(0.5)
+            if lock(handle):
+                return True
+    raise TimeoutError("Auto-Test did not stop within 30 seconds")
 
 
 def main():
@@ -100,33 +124,42 @@ def main():
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--stop", action="store_true")
+    parser.add_argument("--notify", action="store_true")
     args = parser.parse_args()
     args.data_dir = args.data_dir.resolve()
-    if args.stop and not args.data_dir.is_dir():
+    if args.stop:
+        if args.notify and WINDOWS:
+            from ctypes import windll
+
+            try:
+                stopped = stop_desktop(args.data_dir)
+            except OSError:
+                windll.user32.MessageBoxW(None, "未能停止 Auto-Test。请查看用户数据目录中的 desktop.log。", "Auto-Test", 0x10010)
+                raise SystemExit(1) from None
+            message = "Auto-Test 已停止。" if stopped else "Auto-Test 当前未运行。"
+            windll.user32.MessageBoxW(None, message, "Auto-Test", 0x10040)
+        else:
+            stop_desktop(args.data_dir)
         return
     args.data_dir.mkdir(parents=True, exist_ok=True)
     stop_file = args.data_dir / "stop.request"
     with (args.data_dir / "desktop.lock").open("a+b") as handle:
-        if args.stop:
-            if not lock(handle):
-                stop_file.touch()
-                for _ in range(60):
-                    time.sleep(0.5)
-                    if lock(handle):
-                        return
-                raise RuntimeError("Desktop did not stop")
-            return
         if not lock(handle):
             if not args.no_browser:
-                webbrowser.open(f"http://127.0.0.1:{args.port}")
+                (args.data_dir / "show.request").touch()
             return
         stop_file.unlink(missing_ok=True)
+        (args.data_dir / "show.request").unlink(missing_ok=True)
         signal.signal(signal.SIGTERM, lambda *_: stop_file.touch())
         with (args.data_dir / "desktop.log").open("a", encoding="utf-8") as log:
             try:
                 serve(args, stop_file, log)
             except Exception as exc:
                 print(str(exc), file=log, flush=True)
+                if WINDOWS and not args.no_browser:
+                    from ctypes import windll
+
+                    windll.user32.MessageBoxW(None, "Auto-Test 无法启动，请查看用户数据目录中的 desktop.log。", "Auto-Test", 0x10010)
                 raise
 
 

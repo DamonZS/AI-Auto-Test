@@ -12,24 +12,28 @@ import (
 )
 
 type Server struct {
-	st         *store.Store
-	legacyAuth bool
+	st           *store.Store
+	legacyAuth   bool
+	desktopSetup bool
 }
 
 type AuthOptions struct {
 	InsecureDevAuth bool
+	DesktopSetup    bool
 }
 
 func New(st *store.Store, options ...AuthOptions) *Server {
-	legacyAuth := os.Getenv("PLATFORM_INSECURE_DEV_AUTH") == "1"
+	auth := AuthOptions{InsecureDevAuth: os.Getenv("PLATFORM_INSECURE_DEV_AUTH") == "1"}
 	if len(options) != 0 {
-		legacyAuth = options[0].InsecureDevAuth
+		auth = options[0]
 	}
-	return &Server{st: st, legacyAuth: legacyAuth}
+	return &Server{st: st, legacyAuth: auth.InsecureDevAuth, desktopSetup: auth.DesktopSetup}
 }
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+desktopSetupPath, s.desktopSetupStatus)
+	mux.HandleFunc("POST "+desktopSetupPath, s.registerDesktopOwner)
 	mux.HandleFunc("POST /api/auth/login", s.login)
 	mux.HandleFunc("POST /api/auth/logout", s.webSession(s.logout))
 	mux.HandleFunc("GET /api/auth/service-tokens", s.member(s.listServiceTokens, true))
@@ -101,6 +105,11 @@ func (s *Server) Routes() http.Handler {
 
 func cors(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == desktopSetupPath {
+			w.Header().Set("Cache-Control", "no-store")
+			h.ServeHTTP(w, r)
+			return
+		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tenant-Id, X-Agent-Token, Mcp-Session-Id, MCP-Protocol-Version")
 		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
