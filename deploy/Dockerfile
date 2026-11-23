@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir --only-binary=:all: -r /tmp/worker-requirements.t
     && chown -R 10001:10001 /state
 COPY --from=control /autotest-server /usr/local/bin/autotest-server
 COPY --from=web /src/dist /opt/autotest/web
+COPY LICENSE COPYRIGHT.md /opt/autotest/
 COPY agents/*.py /opt/autotest/agents/
 COPY auto_ai/*.py /opt/autotest/auto_ai/
 RUN test -f /opt/autotest/agents/worker_credentials.py

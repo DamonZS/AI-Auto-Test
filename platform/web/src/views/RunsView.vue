@@ -18,9 +18,25 @@ const loading = ref(false)
 const loadError = ref('')
 const detail = ref(null)
 const detailError = ref('')
+const recoveryPatches = ref(null)
+const recoveryError = ref('')
 const detailDialog = ref(null)
 const evidenceSearch = ref('')
 const steps = computed(() => detail.value?.steps ?? [])
+const recoveryEvidence = computed(() => {
+  const reportLines = (detail.value?.report || '').split(/\r?\n/)
+  const structuredRun = reportLines.some((line) => /^结构化 UI 步骤执行 \d+\/\d+，断言 \d+ 项。$/.test(line))
+  const stepLines = steps.value.flatMap((step) => (step.detail || '').split(/\r?\n/))
+  const lines = [...new Set([...reportLines, ...stepLines].filter((line) =>
+    /^(?:第 \d+ 步(?:原控件未找到，尝试定位自愈。|未进行定位自愈：.+。)|定位自愈.+。)$/.test(line)
+  ))]
+  return {
+    lines,
+    attempted: lines.some((line) => !line.includes('未进行定位自愈')),
+    skipped: structuredRun || lines.some((line) => line.includes('未进行定位自愈')),
+  }
+})
+const hasStepDetails = computed(() => steps.value.some((step) => step.detail))
 const hasScreenshots = computed(() => steps.value.some((step) => step.screenshot_jpeg || step.screenshot_error))
 const visibleRuns = computed(() => rows.value.filter((row) => {
   const statusMatches = !statusFilter.value || row.status === statusFilter.value
@@ -28,7 +44,7 @@ const visibleRuns = computed(() => rows.value.filter((row) => {
   return statusMatches && matchesSearch(runSearch.value, [row.case_name, row.id, row.case_id, row.suite_run_id, row.report, row.fallback_reason])
 }))
 const visibleSteps = computed(() => steps.value.filter((step) => matchesSearch(evidenceSearch.value, [
-  step.step, step.action, step.status, runStatuses[step.status],
+  step.step, step.action, step.status, runStatuses[step.status], step.detail,
   step.screenshot_jpeg ? '截图' : screenshotErrors[step.screenshot_error],
 ])))
 let selectedRun = null
@@ -60,6 +76,8 @@ async function openDetail(row) {
   selectedRun = row.id
   detail.value = row
   detailError.value = ''
+  recoveryPatches.value = null
+  recoveryError.value = ''
   evidenceSearch.value = ''
   await nextTick()
   if (selectedRun !== row.id) return
@@ -82,9 +100,20 @@ async function refreshDetail(runId) {
     rows.value = rows.value.map((row) => row.id === runId ? { ...row, ...summary } : row)
     if (['queued', 'running'].includes(result.status)) {
       detailTimer = setTimeout(() => refreshDetail(runId), 1500)
+    } else if (result.case_type === 'ui') {
+      await loadRecoveryPatches(runId)
     }
   } catch (error) {
     if (selectedRun === runId) detailError.value = error.message
+  }
+}
+
+async function loadRecoveryPatches(runId) {
+  try {
+    const patches = await api.get('/api/patches')
+    if (selectedRun === runId) recoveryPatches.value = patches.filter((patch) => patch.run_id === runId)
+  } catch (problem) {
+    if (selectedRun === runId) recoveryError.value = problem.message
   }
 }
 
@@ -158,7 +187,7 @@ onUnmounted(() => {
   >
     <template #status="{ row }"><StatusTag v-if="row.status !== 'needs_review'" :value="row.status" /><span v-else>需复核</span></template>
     <template #case_type="{ row }">{{ { ui: 'UI 自动化', api: '接口', perf: '性能', functional: '手工功能', security: '防御性审查' }[row.case_type] || row.case_type }}</template>
-    <template #self_healed="{ row }">{{ row.self_healed ? '♻' : '—' }}</template>
+    <template #self_healed="{ row }">{{ row.self_healed ? '已自愈' : '—' }}</template>
     <template #token_in="{ row }">{{ row.token_in ? row.token_in + ' / ' + row.token_out : '—' }}</template>
     <template #duration_ms="{ row }">{{ ms(row.duration_ms) }}</template>
     <template #evidence="{ row }">
@@ -188,7 +217,7 @@ onUnmounted(() => {
       <p v-if="detailError" class="error" role="alert">{{ detailError }}</p>
       <p v-else-if="!detail.steps" role="status">正在加载执行证据…</p>
       <dl v-if="detail.case_id">
-        <dt>状态</dt><dd role="status"><StatusTag v-if="detail.status !== 'needs_review'" :value="detail.status" /><span v-else>需复核</span></dd>
+        <dt>执行结果</dt><dd role="status"><StatusTag v-if="detail.status !== 'needs_review'" :value="detail.status" /><span v-else>需复核</span></dd>
         <dt>执行 ID</dt><dd>{{ detail.id }}</dd>
         <template v-if="detail.suite_run_id"><dt>批次 ID</dt><dd>{{ detail.suite_run_id }}</dd></template>
         <template v-if="['functional', 'security'].includes(detail.case_type)"><dt>验证方式</dt><dd>人工核验</dd></template>
@@ -199,6 +228,30 @@ onUnmounted(() => {
         </template>
         <dt>需复核</dt><dd>{{ detail.needs_review ? '是' : '否' }}</dd>
       </dl>
+      <section v-if="detail.steps && detail.case_type === 'ui'" class="recovery" aria-labelledby="run-recovery-heading">
+        <h4 id="run-recovery-heading">执行自愈</h4>
+        <p v-if="detail.self_healed">本次执行已记录自愈成功。</p>
+        <p v-else-if="recoveryEvidence.attempted">已尝试定位自愈，未记录验证成功。</p>
+        <p v-else-if="recoveryEvidence.skipped" class="hint">未尝试定位自愈。</p>
+        <p v-else class="hint">{{ ['queued', 'running'].includes(detail.status) ? '等待执行结束。' : '缺少自愈证据，无法确认是否尝试。' }}</p>
+        <ul v-if="recoveryEvidence.lines.length">
+          <li v-for="line in recoveryEvidence.lines" :key="line">{{ line }}</li>
+        </ul>
+        <details v-if="detail.fallback_reason">
+          <summary>查看执行降级原因</summary>
+          <pre>{{ detail.fallback_reason }}</pre>
+        </details>
+        <p v-if="recoveryError" class="error" role="alert">无法加载候选补丁：{{ recoveryError }}</p>
+        <template v-else-if="recoveryPatches?.length">
+          <ul>
+            <li v-for="patch in recoveryPatches" :key="patch.id">
+              第 {{ patch.step_seq }} 步 · {{ { pending: '待审批', approved: '已批准', rejected: '已拒绝' }[patch.status] || patch.status }}
+            </li>
+          </ul>
+        </template>
+        <p v-else-if="recoveryPatches" class="hint">本次执行没有候选补丁。</p>
+        <button type="button" @click="emit('open-project-view', { projectId, view: 'patches', runId: detail.id })">查看本次执行的自愈补丁</button>
+      </section>
       <template v-if="detail.performance">
         <h4>性能指标</h4>
         <dl>
@@ -212,18 +265,25 @@ onUnmounted(() => {
       <section v-if="detail.steps" aria-labelledby="run-steps-heading">
         <h4 id="run-steps-heading">执行步骤</h4>
         <label v-if="steps.length" class="evidence-filter" for="run-step-search">搜索步骤
-          <input id="run-step-search" v-model.trim="evidenceSearch" type="search" placeholder="序号、动作、状态或截图" />
+          <input id="run-step-search" v-model.trim="evidenceSearch" type="search" placeholder="序号、动作、状态、详情或截图" />
         </label>
         <p v-if="!steps.length" class="hint" role="status">{{ ['queued', 'running'].includes(detail.status) ? '等待步骤证据。' : '此执行没有步骤证据。' }}</p>
         <p v-else-if="!visibleSteps.length" class="hint" role="status">没有符合条件的步骤。</p>
         <div v-else class="step-table" role="region" aria-labelledby="run-steps-heading" tabindex="0">
           <table>
             <caption>{{ visibleSteps.length }} / {{ steps.length }} 个步骤</caption>
-            <thead><tr><th scope="col">序号</th><th scope="col">动作</th><th scope="col">状态</th><th scope="col">耗时</th><th v-if="hasScreenshots" scope="col">截图</th></tr></thead>
+            <thead><tr><th scope="col">序号</th><th scope="col">动作</th><th scope="col">状态</th><th scope="col">耗时</th><th v-if="hasStepDetails" scope="col">详情</th><th v-if="hasScreenshots" scope="col">截图</th></tr></thead>
             <tbody>
               <tr v-for="step in visibleSteps" :key="step.step">
                 <th scope="row">{{ step.step }}</th><td>{{ step.action }}</td>
                 <td><StatusTag :value="step.status" /></td><td>{{ ms(step.duration_ms) }}</td>
+                <td v-if="hasStepDetails">
+                  <details v-if="step.detail">
+                    <summary>查看详情</summary>
+                    <p class="step-detail">{{ step.detail }}</p>
+                  </details>
+                  <span v-else>—</span>
+                </td>
                 <td v-if="hasScreenshots">
                   <details v-if="step.screenshot_jpeg">
                     <summary>查看截图</summary>
@@ -264,6 +324,8 @@ onUnmounted(() => {
 .detail-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .panel h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
 .panel h4 { font-size: 14px; margin: 0 0 8px; }
+.recovery { margin-bottom: 20px; }
+.recovery p, .recovery ul { margin-block: 8px; font-size: 13px; }
 .evidence-filter { margin-bottom: 10px; }
 dl { display: grid; grid-template-columns: 84px 1fr; gap: 10px 12px; font-size: 13px; margin: 0 0 20px; }
 dt { color: var(--muted); }
@@ -274,4 +336,5 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; }
 caption { text-align: start; color: var(--muted); margin-bottom: 8px; }
 th, td { text-align: start; padding: 8px 6px; border-bottom: 1px solid var(--line); }
 .step-screenshot { display: block; max-inline-size: min(55vw, 240px); block-size: auto; margin-block-start: 6px; }
+.step-detail { white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>

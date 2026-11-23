@@ -26,6 +26,8 @@ def run(*command, **options):
 
 def stage(payload, scratch, windows):
     payload.mkdir(parents=True)
+    for name in ("LICENSE", "COPYRIGHT.md"):
+        shutil.copy2(ROOT / name, payload)
     web = scratch / "web"
     web.mkdir()
     web_source = ROOT / "platform/web"

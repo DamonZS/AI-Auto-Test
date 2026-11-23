@@ -48,6 +48,7 @@ const current = ref('overview')
 const error = ref('')
 const viewKey = shallowRef(0)
 const selectedRun = ref('')
+const selectedCase = ref('')
 const generationTarget = ref(null)
 const projects = ref([])
 const projectId = ref('')
@@ -63,7 +64,8 @@ const view = computed(() => NAV.find((n) => n.key === current.value))
 const viewProps = computed(() => {
   const scope = { projectId: projectId.value }
   if (current.value === 'runs') return { ...scope, selectedRun: selectedRun.value }
-  if (current.value === 'cases') return { ...scope, generationTarget: generationTarget.value }
+  if (current.value === 'cases') return { ...scope, generationTarget: generationTarget.value, selectedCase: selectedCase.value }
+  if (current.value === 'patches') return { selectedRun: selectedRun.value }
   return projectPages.has(current.value) ? scope : {}
 })
 
@@ -80,6 +82,7 @@ onMounted(async () => {
 
 function switchTo(key) {
   selectedRun.value = ''
+  selectedCase.value = ''
   generationTarget.value = null
   current.value = key
   viewKey.value += 1
@@ -107,6 +110,7 @@ function openProjectView(target) {
   if (!NAV.some((item) => item.key === target.view)) return
   if (target.projectId) projectId.value = target.projectId
   switchTo(target.view)
+  if (target.view === 'patches') selectedRun.value = target.runId || ''
   refreshProjects()
 }
 
@@ -115,9 +119,16 @@ function selectProject() {
   else switchTo(current.value)
 }
 
-function openRun(id) {
+function openRun(id, sourceProject) {
+  if (sourceProject) projectId.value = sourceProject
   switchTo('runs')
   selectedRun.value = id
+}
+
+function openCaseHistory(target) {
+  if (target.projectId) projectId.value = target.projectId
+  switchTo('cases')
+  selectedCase.value = target.caseId
 }
 
 function generateCases(target) {
@@ -297,7 +308,7 @@ function leave() {
       <ProjectJourney v-if="projectId && projectPages.has(current)" :page="current" @navigate="switchTo" />
       <div :key="viewKey" class="workbench-page">
         <component :is="view.comp" v-bind="viewProps" @open-run="openRun" @generate-cases="generateCases"
-          @open-project="openProject" @open-project-view="openProjectView" @projects-changed="refreshProjects" />
+          @open-project="openProject" @open-project-view="openProjectView" @open-case-history="openCaseHistory" @projects-changed="refreshProjects" />
       </div>
     </main>
   </div>

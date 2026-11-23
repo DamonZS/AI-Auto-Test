@@ -51,7 +51,7 @@ class RecordingThread(QThread):
 class RecorderDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
-        self.setWindowTitle("录制用例")
+        self.setWindowTitle("录制 UI 自动化用例")
         self.setMinimumWidth(480)
         self.worker = None
         self.draft = None

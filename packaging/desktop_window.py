@@ -40,9 +40,6 @@ class DesktopWindow(QMainWindow):
         browser.setUrl(url)
 
         self.recorder = RecorderDialog(self)
-        toolbar = self.addToolBar("用例")
-        toolbar.setMovable(False)
-        toolbar.addAction("录制用例", self.show_recorder)
         app.aboutToQuit.connect(self.recorder.shutdown)
 
         self.tray = QSystemTrayIcon(icon, self)

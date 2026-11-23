@@ -1,10 +1,15 @@
 package api
 
-import "context"
+import (
+	"context"
+	"database/sql"
+)
 
-func (s *Server) claimQueuedRun(ctx context.Context, tenantID string) (string, error) {
+func claimQueuedRun(ctx context.Context, tx *sql.Tx, tenantID string) (string, error) {
 	var runID string
-	err := s.st.DB.QueryRowContext(ctx, `UPDATE runs SET status = 'running'
+	err := tx.QueryRowContext(ctx, `UPDATE runs SET status = 'running', claimed_case_version_no = (
+		SELECT version_no FROM cases WHERE id = runs.case_id AND tenant_id = runs.tenant_id
+	)
 		WHERE rowid = (
 			SELECT candidate.rowid FROM runs candidate
 			LEFT JOIN suite_runs batch ON batch.id = candidate.suite_run_id AND batch.tenant_id = candidate.tenant_id

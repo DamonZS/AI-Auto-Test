@@ -1,6 +1,9 @@
 .hub { display: grid; gap: 14px; min-width: 0; }
 .hub-toolbar, .hub-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
 .hub-grow { flex: 1 1 160px; }
+.hub-toolbar-compact > .hub-field { flex: 0 1 14rem; }
+.hub-toolbar-compact > [for="environment-filter"] { flex-basis: 9rem; }
+.hub-toolbar-compact > button { margin-inline-start: auto; }
 .hub-panel { padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
 .hub-panel h3, .hub-panel p, .hub-notice, .hub-error { margin: 0; }
 .hub-panel h3 { font-size: 15px; font-weight: 600; }

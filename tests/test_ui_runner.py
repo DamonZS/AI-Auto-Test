@@ -308,6 +308,123 @@ class ExecuteUITaskTests(unittest.TestCase):
 
 
 class LocalBrowserDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+    async def run_locator_fixture(self, html, steps, choice="1", settings=None):
+        from urllib.parse import quote
+        from agents import ui_runner
+        from auto_ai.config import config
+
+        model = AsyncMock()
+        if isinstance(choice, Exception):
+            model.side_effect = choice
+        else:
+            model.return_value = types.SimpleNamespace(content=choice, usage_metadata={
+                "input_tokens": 9, "output_tokens": 1,
+            })
+        steps = [{"action": "navigate", "url": "data:text/html," + quote(html)}, *steps]
+        configured = {"model": "fixture-model", "api_key": "fixture-key", "base_url": "https://llm.test"}
+        with patch.object(config, "NEO4J_ENABLED", False), patch.object(
+            ui_runner, "ChatOpenAI", return_value=types.SimpleNamespace(ainvoke=model),
+        ) as factory:
+            result = await ui_runner.execute_ui_task({
+                "scenario": json.dumps({"steps": steps}), "data": {"account": "fixture-private-account"},
+            }, configured if settings is None else settings)
+        if model.await_count:
+            self.assertEqual(factory.call_args.kwargs["model"], "fixture-model")
+            self.assertEqual(factory.call_args.kwargs["base_url"], "https://llm.test")
+            self.assertEqual(factory.call_args.kwargs["api_key"], "fixture-key")
+            self.assertNotIn("fixture-private-account", str(model.await_args))
+        self.assertNotIn("fixture-private-account", str(result))
+        self.assertNotIn("fixture-key", str(result))
+        return result, model
+
+    async def test_locator_recovery_reports_verified_scoped_patch(self):
+        from html import escape
+
+        form = '''<table><tr><td>Other order</td><td><button>Submit order</button></td></tr>
+          <tr><td>Order 21</td><td><button aria-label='Submit order' onclick="this.textContent='Saved'">Go</button>
+          <a href='#'>Wrong role</a><button style='display:none'>Hidden action</button></td></tr></table>'''
+        result, model = await self.run_locator_fixture(
+            f'<button>Confirm</button><iframe data-testid="orders" srcdoc="{escape(form, quote=True)}"></iframe>', [
+                {"action": "click", "frame": "orders", "row": "Order 21", "role": "button", "name": "Confirm"},
+                {"action": "assert_text", "frame": "orders", "row": "Order 21", "text": "Saved"},
+            ],
+        )
+        self.assertEqual(result["status"], "passed", result)
+        self.assertTrue(result["self_healed"])
+        self.assertEqual(result["patch"], {"step_seq": 2, "old_selector": "Confirm", "new_selector": "Submit order"})
+        self.assertEqual((result["token_in"], result["token_out"]), (9, 1))
+        self.assertIn("自愈", result["report"])
+        model.assert_awaited_once()
+        prompt = str(model.await_args)
+        self.assertIn("Submit order", prompt)
+        for unrelated in ("Wrong role", "Hidden action", "Other order"):
+            self.assertNotIn(unrelated, prompt)
+
+    async def test_locator_recovery_declines_invalid_choices_and_redacts_model_errors(self):
+        steps = [
+            {"action": "click", "role": "button", "name": "Confirm"},
+            {"action": "assert_text", "text": "Saved"},
+        ]
+        html = '<button onclick="this.textContent=\'Saved\'">Submit order</button>'
+        for choice in ("STOP", "button#submit", RuntimeError("fixture-key fixture-private-account")):
+            with self.subTest(choice=type(choice).__name__):
+                result, model = await self.run_locator_fixture(html, steps, choice)
+                model.assert_awaited_once()
+                self.assertEqual(result["status"], "failed")
+                self.assertNotIn("patch", result)
+                self.assertIn("自愈", result["report"])
+
+    async def test_locator_recovery_requires_later_assertion_and_successful_run(self):
+        html = '<button onclick="this.textContent=\'Saved\'">Submit order</button><p>Ready</p>'
+        click = {"action": "click", "role": "button", "name": "Confirm"}
+        for subsequent in (
+            [{"action": "assert_url", "expected": "missing"}],
+            [{"action": "assert_text", "text": "Saved"}, {**click, "name": "Another missing button"}],
+            [],
+        ):
+            with self.subTest(subsequent=subsequent):
+                result, model = await self.run_locator_fixture(html, [
+                    {"action": "assert_text", "text": "Ready"}, click, *subsequent,
+                ])
+                self.assertEqual(model.await_count, int(bool(subsequent)))
+                self.assertEqual(result["status"], "failed")
+                self.assertNotIn("patch", result)
+                self.assertIn("自愈", result["report"])
+
+    async def test_locator_recovery_skips_duplicate_and_sensitive_names(self):
+        result, model = await self.run_locator_fixture('''
+            <button>Submit</button><button>Submit</button>
+            <button>fixture-private-account</button><a href='#'>Confirm</a>''', [
+            {"action": "click", "role": "button", "name": "Apply"},
+            {"action": "assert_url", "expected": "data:text/html"},
+        ])
+        self.assertEqual(result["status"], "failed")
+        self.assertNotIn("patch", result)
+        self.assertIn("唯一", result["report"])
+        model.assert_not_awaited()
+
+    async def test_locator_recovery_does_not_retry_existing_control_action_failure(self):
+        result, model = await self.run_locator_fixture('''
+            <div role="checkbox" aria-checked="false" aria-label="Confirm" aria-disabled="true"></div>
+            <label><input type="checkbox"> Replacement</label>''', [
+            {"action": "check", "role": "checkbox", "name": "Confirm"},
+            {"action": "assert_url", "expected": "data:text/html"},
+        ])
+        self.assertEqual(result["status"], "failed")
+        self.assertNotIn("patch", result)
+        model.assert_not_awaited()
+
+    async def test_locator_recovery_uses_original_fill_data_without_sending_it_to_model(self):
+        result, model = await self.run_locator_fixture('''
+            <input aria-label='Customer: "Login"' value='fixture-private-account'
+              oninput="if (this.value === ['fixture', 'private', 'account'].join('-')) document.body.append('Accepted')">''', [
+            {"action": "fill", "role": "textbox", "name": "User ID", "data_key": "account"},
+            {"action": "assert_text", "text": "Accepted"},
+        ])
+        self.assertEqual(result["status"], "passed", result)
+        self.assertEqual(result["patch"]["new_selector"], 'Customer: "Login"')
+        model.assert_awaited_once()
+
     async def test_opt_in_screenshots_capture_passed_and_failed_steps_with_masked_inputs(self):
         import time
         from agents.ui_runner import _execute_structured_steps

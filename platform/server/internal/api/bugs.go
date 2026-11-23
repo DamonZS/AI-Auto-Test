@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -192,33 +194,165 @@ func (s *Server) retestBug(w http.ResponseWriter, r *http.Request, tid string) {
 }
 
 func (s *Server) listPatches(w http.ResponseWriter, r *http.Request, tid string) {
-	rows, _ := s.st.DB.Query(
-		"SELECT * FROM heal_patches WHERE tenant_id = ? ORDER BY created_at DESC", tid)
-	out, _ := rowsToMaps(rows)
+	rows, err := s.st.DB.QueryContext(r.Context(), `SELECT h.*, run.case_id, c.name AS case_name, c.project_id FROM heal_patches h
+		LEFT JOIN runs run ON run.id = h.run_id AND run.tenant_id = h.tenant_id
+		LEFT JOIN cases c ON c.id = run.case_id AND c.tenant_id = h.tenant_id
+		WHERE h.tenant_id = ? ORDER BY h.created_at DESC, h.rowid DESC`, tid)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法读取自愈补丁")
+		return
+	}
+	out, err := rowsToMaps(rows)
+	if err != nil || rows.Err() != nil {
+		fail(w, http.StatusInternalServerError, "无法读取自愈补丁")
+		return
+	}
 	write(w, http.StatusOK, out)
 }
 
 func (s *Server) decidePatch(w http.ResponseWriter, r *http.Request, tid string) {
 	var b struct {
 		Decision string `json:"decision"`
-		Reviewer string `json:"reviewer"`
 	}
 	if err := decode(r, &b); err != nil || (b.Decision != "approve" && b.Decision != "reject") {
 		fail(w, http.StatusBadRequest, "decision 取值 approve / reject")
 		return
 	}
 	pid := r.PathValue("id")
-	res, err := s.st.DB.Exec(
-		"UPDATE heal_patches SET status = ? WHERE id = ? AND tenant_id = ? AND status = 'pending'",
-		map[string]string{"approve": "approved", "reject": "rejected"}[b.Decision], pid, tid)
+	ctx := r.Context()
+	tx, err := s.st.DB.BeginTx(ctx, nil)
 	if err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		fail(w, http.StatusInternalServerError, "无法处理自愈补丁")
 		return
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	defer tx.Rollback()
+	var runID string
+	var role sql.NullString
+	var patch healingPatch
+	err = tx.QueryRowContext(ctx, `UPDATE heal_patches SET status = ?
+		WHERE id = ? AND tenant_id = ? AND status = 'pending'
+		RETURNING run_id, step_seq, old_selector, new_selector, role`,
+		map[string]string{"approve": "approved", "reject": "rejected"}[b.Decision], pid, tid,
+	).Scan(&runID, &patch.StepSeq, &patch.OldSelector, &patch.NewSelector, &role)
+	if err == sql.ErrNoRows {
 		fail(w, http.StatusConflict, "补丁不存在或已处理")
 		return
 	}
-	s.audit(tid, b.Reviewer, "web", "patch."+b.Decision, pid)
-	write(w, http.StatusOK, map[string]string{"id": pid, "status": b.Decision})
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法处理自愈补丁")
+		return
+	}
+	var appliedVersion *int
+	if b.Decision == "approve" {
+		version, err := applyHealingPatch(ctx, tx, tid, runID, role.String, patch)
+		if err == sql.ErrNoRows {
+			fail(w, http.StatusConflict, "用例版本或定位已变化，或补丁来源不受支持")
+			return
+		}
+		if err == nil {
+			_, err = tx.ExecContext(ctx, "UPDATE heal_patches SET applied_version_no = ? WHERE id = ? AND tenant_id = ?", version, pid, tid)
+		}
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "无法应用自愈补丁")
+			return
+		}
+		appliedVersion = &version
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_logs (tenant_id, actor, channel, action, target) VALUES (?,?,?,?,?)`,
+		tid, authenticatedActor(r), "web", "patch."+b.Decision, pid); err != nil || tx.Commit() != nil {
+		fail(w, http.StatusInternalServerError, "无法保存补丁审批")
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"id": pid, "status": b.Decision, "applied_version_no": appliedVersion})
+}
+
+func applyHealingPatch(ctx context.Context, tx *sql.Tx, tid, runID, role string, patch healingPatch) (int, error) {
+	if role == "" {
+		return 0, sql.ErrNoRows
+	}
+	var caseID, scenario string
+	var version int
+	err := tx.QueryRowContext(ctx, `SELECT c.id, c.scenario, c.version_no
+		FROM runs r JOIN cases c ON c.id = r.case_id AND c.tenant_id = r.tenant_id
+		WHERE r.id = ? AND r.tenant_id = ? AND c.type = 'ui' AND c.version_no = r.claimed_case_version_no`,
+		runID, tid).Scan(&caseID, &scenario, &version)
+	if err != nil {
+		return 0, err
+	}
+	updated, currentRole, ok := patch.applyTo(scenario)
+	if !ok || currentRole != role {
+		return 0, sql.ErrNoRows
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO case_revisions (tenant_id, case_id, version_no, scenario) VALUES (?, ?, ?, ?)
+		ON CONFLICT (tenant_id, case_id, version_no) DO NOTHING`, tid, caseID, version, scenario); err != nil {
+		return 0, err
+	}
+	version++
+	if _, err := tx.ExecContext(ctx, `INSERT INTO case_revisions (tenant_id, case_id, version_no, scenario) VALUES (?, ?, ?, ?)`,
+		tid, caseID, version, updated); err != nil {
+		return 0, err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE cases SET scenario = ?, version_no = ?, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`,
+		updated, version, caseID, tid)
+	return version, err
+}
+
+func (patch healingPatch) applyTo(scenario string) (string, string, bool) {
+	var fields map[string]json.RawMessage
+	var steps []map[string]json.RawMessage
+	if json.Unmarshal([]byte(scenario), &fields) != nil || json.Unmarshal(fields["steps"], &steps) != nil || patch.StepSeq < 1 || patch.StepSeq > len(steps) {
+		return "", "", false
+	}
+	var role string
+	assertionAfter := false
+	for index, step := range steps {
+		action := uiStepText(step, "action")
+		var required []string
+		switch action {
+		case "navigate":
+			required = []string{"url"}
+		case "click", "check", "uncheck":
+			required = []string{"role", "name"}
+		case "fill", "select":
+			required = []string{"role", "name", "data_key"}
+		case "wait_text", "assert_text":
+			required = []string{"text"}
+			assertionAfter = assertionAfter || index+1 > patch.StepSeq
+		case "assert_url":
+			required = []string{"expected"}
+			assertionAfter = assertionAfter || index+1 > patch.StepSeq
+		default:
+			return "", "", false
+		}
+		for _, field := range []string{"frame", "row"} {
+			if _, exists := step[field]; exists {
+				required = append(required, field)
+			}
+		}
+		for _, field := range required {
+			if strings.TrimSpace(uiStepText(step, field)) == "" {
+				return "", "", false
+			}
+		}
+		if raw, exists := step["screenshot"]; exists && string(raw) != "true" && string(raw) != "false" {
+			return "", "", false
+		}
+		if index+1 == patch.StepSeq && required[0] == "role" && uiStepText(step, "name") == patch.OldSelector {
+			role = uiStepText(step, "role")
+		}
+	}
+	if !assertionAfter || role == "" || strings.TrimSpace(patch.NewSelector) == "" || patch.OldSelector == patch.NewSelector {
+		return "", "", false
+	}
+	steps[patch.StepSeq-1]["name"] = json.RawMessage(mustJSON(patch.NewSelector))
+	fields["steps"] = json.RawMessage(mustJSON(steps))
+	return mustJSON(fields), role, true
+}
+
+func uiStepText(step map[string]json.RawMessage, field string) string {
+	var text string
+	if json.Unmarshal(step[field], &text) != nil {
+		return ""
+	}
+	return text
 }

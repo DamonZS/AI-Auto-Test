@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from '../api'
 import DataTable from '../components/DataTable.vue'
 import StatusTag from '../components/StatusTag.vue'
@@ -8,7 +8,7 @@ import CaseWorkbookExport from '../components/CaseWorkbookExport.vue'
 import CaseWorkbookImport from '../components/CaseWorkbookImport.vue'
 import HttpScenarioFields from '../components/HttpScenarioFields.vue'
 
-const props = defineProps({ projectId: { type: String, default: '' }, generationTarget: { type: Object, default: null } })
+const props = defineProps({ projectId: { type: String, default: '' }, generationTarget: { type: Object, default: null }, selectedCase: { type: String, default: '' } })
 const emit = defineEmits(['open-run'])
 const rows = ref([])
 const projects = ref([])
@@ -45,6 +45,18 @@ const checklist = ref([])
 const scheduleEditing = ref(null)
 const scheduleExists = ref(false)
 const scheduleForm = ref({ enabled: true, weekday: 1, time: '09:00' })
+const canRecord = ref(Boolean(window.caseWorkbook?.recordUiCase))
+
+function workbookReady() {
+  canRecord.value = Boolean(window.caseWorkbook?.recordUiCase)
+}
+
+onMounted(() => window.addEventListener('case-workbook-ready', workbookReady))
+onUnmounted(() => window.removeEventListener('case-workbook-ready', workbookReady))
+
+function recordUiCase() {
+  window.caseWorkbook.recordUiCase()
+}
 
 const columns = [
   { key: 'name', label: '用例', width: '20%' },
@@ -404,7 +416,18 @@ function isStructuredUI(row) {
   try { return Array.isArray(JSON.parse(row.scenario)?.steps) } catch { return false }
 }
 
-onMounted(() => load().catch((problem) => { error.value = problem.message }))
+onMounted(async () => {
+  try {
+    await load()
+    if (props.selectedCase) {
+      const selected = rows.value.find((row) => row.id === props.selectedCase)
+      if (selected) openEdit(selected)
+      else error.value = '用例不存在或无法访问'
+    }
+  } catch (problem) {
+    error.value = problem.message
+  }
+})
 </script>
 
 <template>
@@ -427,6 +450,7 @@ onMounted(() => load().catch((problem) => { error.value = problem.message }))
         <option value="approved">已定稿</option>
       </select>
       <button class="primary" type="button" :disabled="!projectId" @click="openCreate">新建用例</button>
+      <button v-if="canRecord" type="button" @click="recordUiCase">录制 UI 自动化用例</button>
       <button type="button" :disabled="!projectId" :aria-expanded="showGeneration" aria-controls="case-generation" @click="showGeneration = !showGeneration">AI 生成</button>
     </search>
     <label v-if="projectId">执行版本
@@ -612,7 +636,7 @@ onMounted(() => load().catch((problem) => { error.value = problem.message }))
         </div>
         <button v-if="editing.status === 'draft'" type="button" @click="addStep(editing.steps)">添加步骤</button>
       </fieldset>
-      <details @toggle="($event) => $event.target.open && loadHistory()">
+      <details :open="selectedCase === editing.id || undefined" @toggle="($event) => $event.target.open && loadHistory()">
         <summary>用例修订历史</summary>
         <p v-if="historyError" role="alert" class="error">{{ historyError }}</p>
         <details v-for="revision in caseHistory" :key="revision.version_no">

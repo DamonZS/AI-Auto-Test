@@ -18,6 +18,10 @@ _XLSX_FILTER = "Excel 工作簿 (*.xlsx)"
 
 
 class CaseWorkbookBridge(QObject):
+    @Slot()
+    def recordUiCase(self):
+        self.parent().show_recorder()
+
     @Slot(result="QVariantMap")
     def importWorkbook(self):
         path, _ = QFileDialog.getOpenFileName(self.parent(), "导入用例工作簿", "", _XLSX_FILTER)

@@ -121,6 +121,7 @@ def recorder_qt():
 def desktop_recording(recorder_qt, recording_site, monkeypatch, request):
     from PySide6.QtCore import QUrl
     from PySide6.QtGui import QIcon
+    from PySide6.QtWebEngineWidgets import QWebEngineView
     from PySide6.QtWidgets import QToolBar
 
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "packaging"))
@@ -150,10 +151,20 @@ def desktop_recording(recorder_qt, recording_site, monkeypatch, request):
     recorder_qt.setQuitOnLastWindowClosed(False)
     window = DesktopWindow(recorder_qt, QIcon(), QUrl(recording_site))
     try:
-        action = window.findChild(QToolBar).actions()[0]
-        assert action.text() == "录制用例"
-        action.trigger()
-        assert window.recorder.isVisible()
+        assert not window.findChildren(QToolBar)
+        page = window.findChild(QWebEngineView).page()
+        loaded = []
+        page.loadFinished.connect(loaded.append)
+        wait_for_recorder(lambda: loaded)
+        assert loaded == [True]
+        page.runJavaScript("""
+            if (window.caseWorkbook) {
+                window.caseWorkbook.recordUiCase();
+            } else {
+                window.addEventListener('case-workbook-ready', () => window.caseWorkbook.recordUiCase(), { once: true });
+            }
+        """)
+        wait_for_recorder(window.recorder.isVisible)
         window.recorder.address.setText(f"{recording_site}/?seed=synthetic-query")
         yield window, browser_closed
     finally:

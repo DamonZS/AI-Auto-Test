@@ -87,7 +87,7 @@ onMounted(load)
 
 <template>
   <div class="hub">
-    <header class="hub-toolbar">
+    <header class="hub-toolbar hub-toolbar-compact">
       <label v-if="!props.projectId" class="hub-field hub-grow" for="environment-project">项目
         <select id="environment-project" v-model="projectId" name="project_id" :disabled="loading || saving">
           <option v-if="!projects.length" value="">暂无项目</option>

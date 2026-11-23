@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 type performanceResult struct {
@@ -92,9 +93,11 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request, tid string) {
 }
 
 func (s *Server) getRun(w http.ResponseWriter, r *http.Request, tid string) {
-	rows, err := s.st.DB.Query(`SELECT r.*, c.name AS case_name, c.type AS case_type, c.scenario,
+	rows, err := s.st.DB.Query(`SELECT r.*, c.name AS case_name, c.type AS case_type,
+		COALESCE(v.scenario, c.scenario) AS scenario,
 		COALESCE(e.steps_json, '[]') AS steps
-		FROM runs r JOIN cases c ON c.id = r.case_id
+		FROM runs r JOIN cases c ON c.id = r.case_id AND c.tenant_id = r.tenant_id
+		LEFT JOIN case_revisions v ON v.case_id = c.id AND v.tenant_id = c.tenant_id AND v.version_no = r.claimed_case_version_no
 		LEFT JOIN run_step_evidence e ON e.run_id = r.id AND e.tenant_id = r.tenant_id
 		WHERE r.id = ? AND r.tenant_id = ?`, r.PathValue("id"), tid)
 	if err != nil {
@@ -118,7 +121,14 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request, tid string) {
 
 // heartbeat 供执行端领取与续租；返回待执行任务（首版按租户取最早 queued）。
 func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, tid string) {
-	rid, err := s.claimQueuedRun(r.Context(), tid)
+	ctx := r.Context()
+	tx, err := s.st.DB.BeginTx(ctx, nil)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法领取执行任务")
+		return
+	}
+	defer tx.Rollback()
+	rid, err := claimQueuedRun(ctx, tx, tid)
 	if err == sql.ErrNoRows {
 		write(w, http.StatusOK, map[string]any{"run": nil})
 		return
@@ -127,7 +137,7 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, tid string) {
 		fail(w, http.StatusInternalServerError, "无法领取执行任务")
 		return
 	}
-	rows, err := s.st.DB.Query(`SELECT r.id AS run_id, r.case_id, r.version_id, r.dataset_id, r.data_row_id,
+	rows, err := tx.QueryContext(ctx, `SELECT r.id AS run_id, r.case_id, r.version_id, r.dataset_id, r.data_row_id,
 		c.name, c.type, c.scenario, c.project_id, COALESCE(e.base_url, p.base_url) AS base_url, COALESCE(tdr.values_json, '{}') AS data_json
 		FROM runs r JOIN cases c ON c.id = r.case_id AND c.tenant_id = r.tenant_id
 		JOIN projects p ON p.id = c.project_id AND p.tenant_id = c.tenant_id
@@ -147,6 +157,10 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, tid string) {
 		fail(w, http.StatusNotFound, "执行记录不存在")
 		return
 	}
+	if err := tx.Commit(); err != nil {
+		fail(w, http.StatusInternalServerError, "无法领取执行任务")
+		return
+	}
 	var data map[string]string
 	_ = json.Unmarshal([]byte(out[0]["data_json"].(string)), &data)
 	delete(out[0], "data_json")
@@ -161,6 +175,12 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, tid string) {
 		}
 	}
 	write(w, http.StatusOK, map[string]any{"run": out[0]})
+}
+
+type healingPatch struct {
+	StepSeq     int    `json:"step_seq"`
+	OldSelector string `json:"old_selector"`
+	NewSelector string `json:"new_selector"`
 }
 
 func (s *Server) finishRun(w http.ResponseWriter, r *http.Request, tid string) {
@@ -181,11 +201,7 @@ func (s *Server) finishRun(w http.ResponseWriter, r *http.Request, tid string) {
 			Title     string `json:"title"`
 			Evidence  string `json:"evidence"`
 		} `json:"failures"`
-		Patch *struct {
-			StepSeq     int    `json:"step_seq"`
-			OldSelector string `json:"old_selector"`
-			NewSelector string `json:"new_selector"`
-		} `json:"patch"`
+		Patch *healingPatch `json:"patch"`
 	}
 	if err := decode(r, &b); err != nil {
 		fail(w, http.StatusBadRequest, "请求体无效")
@@ -203,6 +219,12 @@ func (s *Server) finishRun(w http.ResponseWriter, r *http.Request, tid string) {
 		fail(w, http.StatusBadRequest, "步骤证据无效")
 		return
 	}
+	if b.Patch != nil && (b.Status != "passed" || !b.Passed || b.NeedsReview || !b.SelfHealed ||
+		b.Patch.StepSeq < 1 || strings.TrimSpace(b.Patch.OldSelector) == "" || strings.TrimSpace(b.Patch.NewSelector) == "" ||
+		b.Patch.OldSelector == b.Patch.NewSelector) {
+		fail(w, http.StatusBadRequest, "自愈补丁须对应通过的自愈执行及有效名称")
+		return
+	}
 	rid := r.PathValue("id")
 	tx, err := s.st.DB.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -212,15 +234,18 @@ func (s *Server) finishRun(w http.ResponseWriter, r *http.Request, tid string) {
 	defer tx.Rollback()
 	err = tx.QueryRow(`UPDATE runs SET status = ?, passed = ?, needs_review = ?, self_healed = ?,
 		token_in = ?, token_out = ?, duration_ms = ?, report = ?, fallback_reason = ?, performance_json = ?, ended_at = datetime('now')
-		WHERE id = ? AND tenant_id = ? RETURNING id`,
+		WHERE id = ? AND tenant_id = ? AND (? = 0 OR status = 'running') RETURNING id`,
 		b.Status, boolInt(b.Passed), boolInt(b.NeedsReview), boolInt(b.SelfHealed),
-		b.TokenIn, b.TokenOut, b.DurationMS, b.Report, b.FallbackReason, performance, rid, tid).Scan(&rid)
+		b.TokenIn, b.TokenOut, b.DurationMS, b.Report, b.FallbackReason, performance, rid, tid, boolInt(b.Patch != nil)).Scan(&rid)
 	if err == sql.ErrNoRows {
 		fail(w, http.StatusNotFound, "执行记录不存在")
 		return
 	}
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if b.Patch != nil && !saveHealingPatch(w, r, tx, tid, rid, *b.Patch) {
 		return
 	}
 	if len(b.Steps) > 0 {
@@ -237,11 +262,31 @@ func (s *Server) finishRun(w http.ResponseWriter, r *http.Request, tid string) {
 	for _, f := range b.FailureSigs {
 		s.upsertBug(tid, rid, f.Signature, f.Title, f.Evidence)
 	}
-	if b.Patch != nil {
-		_, _ = s.st.DB.Exec(`INSERT INTO heal_patches (id, tenant_id, run_id, step_seq, old_selector, new_selector)
-			VALUES (?,?,?,?,?,?)`, id(), tid, rid, b.Patch.StepSeq, b.Patch.OldSelector, b.Patch.NewSelector)
-	}
 	write(w, http.StatusOK, map[string]string{"id": rid})
+}
+
+func saveHealingPatch(w http.ResponseWriter, r *http.Request, tx *sql.Tx, tid, rid string, patch healingPatch) bool {
+	ctx := r.Context()
+	var scenario sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT CASE WHEN c.version_no = r.claimed_case_version_no THEN c.scenario ELSE v.scenario END
+		FROM runs r JOIN cases c ON c.id = r.case_id AND c.tenant_id = r.tenant_id
+		LEFT JOIN case_revisions v ON v.case_id = c.id AND v.tenant_id = c.tenant_id AND v.version_no = r.claimed_case_version_no
+		WHERE r.id = ? AND r.tenant_id = ? AND c.type = 'ui'`, rid, tid).Scan(&scenario)
+	if err != nil && err != sql.ErrNoRows {
+		fail(w, http.StatusInternalServerError, "无法读取自愈执行的用例版本")
+		return false
+	}
+	_, role, ok := patch.applyTo(scenario.String)
+	if !ok {
+		fail(w, http.StatusBadRequest, "自愈补丁与执行时的结构化 UI 步骤不匹配")
+		return false
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO heal_patches (id, tenant_id, run_id, step_seq, old_selector, new_selector, role)
+		VALUES (?,?,?,?,?,?,?)`, id(), tid, rid, patch.StepSeq, patch.OldSelector, patch.NewSelector, role); err != nil {
+		fail(w, http.StatusInternalServerError, "无法保存自愈补丁")
+		return false
+	}
+	return true
 }
 
 func boolInt(b bool) int {

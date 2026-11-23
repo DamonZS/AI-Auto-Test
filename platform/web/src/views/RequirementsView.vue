@@ -280,7 +280,7 @@ watch(() => props.projectId, () => {
   </div>
   <section v-if="projectId && entryMode === 'manual'" class="panel">
     <h2 id="requirement-form-heading">{{ editingId ? '编辑需求' : '手工录入' }}</h2>
-    <form class="form" aria-labelledby="requirement-form-heading" @submit.prevent="save">
+    <form class="form manual-form" aria-labelledby="requirement-form-heading" @submit.prevent="save">
       <div class="field">
         <label for="requirement-code">编号</label>
         <input id="requirement-code" v-model="form.code" name="code" :disabled="busy" />
@@ -289,12 +289,14 @@ watch(() => props.projectId, () => {
         <label for="requirement-title">标题（必填）</label>
         <input id="requirement-title" v-model.trim="form.title" name="title" required :disabled="busy" />
       </div>
-      <div class="field grow">
+      <div class="field manual-form-content">
         <label for="requirement-content">内容</label>
         <textarea id="requirement-content" v-model="form.content" name="content" rows="3" :disabled="busy" />
       </div>
-      <button class="primary" type="submit" :disabled="busy">{{ editingId ? '保存修订' : '录入' }}</button>
-      <button type="button" :disabled="busy" @click="resetForm(); entryMode = ''">取消</button>
+      <div class="actions manual-form-actions">
+        <button class="primary" type="submit" :disabled="busy">{{ editingId ? '保存修订' : '录入' }}</button>
+        <button type="button" :disabled="busy" @click="resetForm(); entryMode = ''">取消</button>
+      </div>
     </form>
   </section>
   <section v-if="projectId && entryMode === 'import'" class="panel">
@@ -498,6 +500,13 @@ h4 { font-size: 14px; }
 }
 .form, .actions, .comparison { display: flex; flex-wrap: wrap; gap: 8px; }
 .form { align-items: end; column-gap: 12px; }
+.manual-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 3fr); gap: 12px; }
+.manual-form input { width: 100%; min-width: 0; }
+.manual-form-content, .manual-form-actions { grid-column: 1 / -1; }
+.manual-form-actions { justify-content: flex-end; }
+@media (max-width: 780px) {
+  .manual-form { grid-template-columns: minmax(0, 1fr); }
+}
 .field { display: grid; gap: 4px; justify-items: start; }
 .grow, .comparison > div { flex: 1 1 220px; min-width: 0; }
 select, input, textarea { box-sizing: border-box; max-width: 100%; font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }

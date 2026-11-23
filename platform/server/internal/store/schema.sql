@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS runs (
   tenant_id TEXT NOT NULL,
   case_id TEXT NOT NULL,
   version_id TEXT NOT NULL DEFAULT '',
+  claimed_case_version_no INTEGER,
   suite_run_id TEXT NOT NULL DEFAULT '',
   dataset_id TEXT NOT NULL DEFAULT '',
   data_row_id TEXT NOT NULL DEFAULT '',
@@ -264,6 +265,8 @@ CREATE TABLE IF NOT EXISTS heal_patches (
   step_seq INTEGER NOT NULL DEFAULT 0,
   old_selector TEXT NOT NULL DEFAULT '',
   new_selector TEXT NOT NULL DEFAULT '',
+  role TEXT,
+  applied_version_no INTEGER,
   verdict TEXT NOT NULL DEFAULT 'drift',
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
