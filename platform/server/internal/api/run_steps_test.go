@@ -40,23 +40,27 @@ func TestRunStepEvidenceIsPersistedAndTenantScoped(t *testing.T) {
 	}
 }
 
-func TestSampledCaseMustBeApprovedBeforeDirectRun(t *testing.T) {
+func TestGeneratedCaseMustBeApprovedBeforeDirectRun(t *testing.T) {
 	st := openTestStore(t)
 	seedMCPData(t, st)
-	if _, err := st.DB.Exec("UPDATE cases SET generation_mode = 'sampling' WHERE id = ?", "case-a"); err != nil {
-		t.Fatal(err)
-	}
 	handler := New(st).Routes()
-	response := serveTenant(handler, http.MethodPost, "/api/cases/case-a/run", "tenant-a", []byte(`{}`))
-	if response.Code != http.StatusConflict {
-		t.Fatalf("sampled draft run status = %d: %s", response.Code, response.Body)
-	}
-	if _, err := st.DB.Exec("UPDATE cases SET status = 'approved' WHERE id = ?", "case-a"); err != nil {
-		t.Fatal(err)
-	}
-	response = serveTenant(handler, http.MethodPost, "/api/cases/case-a/run", "tenant-a", []byte(`{}`))
-	if response.Code != http.StatusOK {
-		t.Fatalf("approved sampled case run status = %d: %s", response.Code, response.Body)
+	for _, mode := range []string{"sampling", "platform_llm"} {
+		t.Run(mode, func(t *testing.T) {
+			if _, err := st.DB.Exec("UPDATE cases SET generation_mode = ?, status = 'draft' WHERE id = 'case-a'", mode); err != nil {
+				t.Fatal(err)
+			}
+			response := serveTenant(handler, http.MethodPost, "/api/cases/case-a/run", "tenant-a", []byte(`{}`))
+			if response.Code != http.StatusConflict {
+				t.Fatalf("generated draft run status = %d: %s", response.Code, response.Body)
+			}
+			if _, err := st.DB.Exec("UPDATE cases SET status = 'approved' WHERE id = 'case-a'"); err != nil {
+				t.Fatal(err)
+			}
+			response = serveTenant(handler, http.MethodPost, "/api/cases/case-a/run", "tenant-a", []byte(`{}`))
+			if response.Code != http.StatusOK {
+				t.Fatalf("approved generated case run status = %d: %s", response.Code, response.Body)
+			}
+		})
 	}
 }
 

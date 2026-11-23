@@ -1,31 +1,44 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { api } from '../api'
 import DataTable from '../components/DataTable.vue'
 import StatusTag from '../components/StatusTag.vue'
 
+const props = defineProps({ selectedRun: { type: String, default: '' } })
 const rows = ref([])
 const detail = ref(null)
 const detailError = ref('')
 let selectedRun = null
+let detailTimer
 
 async function load() {
   rows.value = await api.get('/api/runs')
 }
 
 async function openDetail(row) {
+  clearTimeout(detailTimer)
   selectedRun = row.id
   detail.value = row
   detailError.value = ''
+  await refreshDetail(row.id)
+}
+
+async function refreshDetail(runId) {
   try {
-    const result = await api.get(`/api/runs/${row.id}`)
-    if (selectedRun === row.id) detail.value = result
+    const result = await api.get(`/api/runs/${runId}`)
+    if (selectedRun !== runId) return
+    detail.value = result
+    rows.value = rows.value.map((row) => row.id === runId ? result : row)
+    if (['queued', 'running'].includes(result.status)) {
+      detailTimer = setTimeout(() => refreshDetail(runId), 1500)
+    }
   } catch (error) {
-    if (selectedRun === row.id) detailError.value = error.message
+    if (selectedRun === runId) detailError.value = error.message
   }
 }
 
 function closeDetail() {
+  clearTimeout(detailTimer)
   selectedRun = null
   detail.value = null
 }
@@ -35,7 +48,13 @@ function ms(v) {
   return v > 1000 ? (v / 1000).toFixed(1) + 's' : v + 'ms'
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  if (props.selectedRun) {
+    await openDetail(rows.value.find((row) => row.id === props.selectedRun) || { id: props.selectedRun })
+  }
+})
+onUnmounted(closeDetail)
 </script>
 
 <template>
@@ -68,7 +87,7 @@ onMounted(load)
     <div class="panel">
       <h3>{{ detail.case_name }}</h3>
       <dl>
-        <dt>状态</dt><dd><StatusTag :value="detail.status" /></dd>
+        <dt>状态</dt><dd role="status"><StatusTag :value="detail.status" /></dd>
         <dt>场景</dt><dd>{{ detail.scenario }}</dd>
         <dt>耗时</dt><dd>{{ ms(detail.duration_ms) }}</dd>
         <dt>Token</dt><dd>{{ detail.token_in }} / {{ detail.token_out }}</dd>

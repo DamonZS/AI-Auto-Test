@@ -3,7 +3,10 @@ import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
 import DataTable from '../components/DataTable.vue'
 import StatusTag from '../components/StatusTag.vue'
+import CaseGenerationPanel from '../components/CaseGenerationPanel.vue'
 
+const props = defineProps({ generationTarget: { type: Object, default: null } })
+const emit = defineEmits(['open-run'])
 const rows = ref([])
 const projects = ref([])
 const requirements = ref([])
@@ -11,11 +14,14 @@ const environments = ref([])
 const versions = ref([])
 const datasets = ref([])
 const dataRecords = ref([])
-const projectId = ref('')
-const runVersion = ref('')
+const projectId = ref(props.generationTarget?.projectId || '')
+const runVersion = ref(props.generationTarget?.versionId || '')
+const showGeneration = ref(!!props.generationTarget)
+const generationTarget = ref(props.generationTarget)
 const statusFilter = ref('')
 const form = ref({ name: '', type: 'ui', scenario: '', requirement_id: '', environment_id: '', expected_source: 'requirement', dataset_id: '', data_row_id: '' })
 const error = ref('')
+const runSubmitting = ref('')
 const editing = ref(null)
 const structured = ref(false)
 const steps = ref([])
@@ -38,8 +44,8 @@ const MODE_LABEL = { manual: '手工', sampling: 'Agent', task_pack: '任务包'
 const ELEMENT_ACTIONS = ['click', 'fill', 'select', 'check', 'uncheck']
 const TEXT_ACTIONS = ['wait_text', 'assert_text']
 
-function encodeSteps() {
-  return JSON.stringify({ steps: steps.value.map((step) => {
+function encodeSteps(items) {
+  return JSON.stringify({ steps: items.map((step) => {
     const { frame, row, ...fields } = step
     return { ...fields, ...(frame?.trim() && { frame: frame.trim() }), ...(row?.trim() && { row: row.trim() }) }
   }) })
@@ -75,6 +81,7 @@ async function loadDataRecords() {
 }
 
 function changeProject() {
+  generationTarget.value = null
   runVersion.value = ''
   form.value.requirement_id = ''
   form.value.environment_id = ''
@@ -104,7 +111,7 @@ async function importScenario(event) {
 }
 
 async function add() {
-  const scenario = structured.value && form.value.type === 'ui' ? encodeSteps() : form.value.scenario
+  const scenario = structured.value && form.value.type === 'ui' ? encodeSteps(steps.value) : form.value.scenario
   if (!form.value.name || !scenario) return
   error.value = ''
   try {
@@ -127,9 +134,9 @@ function toggleStructured(target) {
   if (editing.value.structured) {
     try {
       const scenario = JSON.parse(editing.value.scenario)
-      steps.value = Array.isArray(scenario.steps) ? scenario.steps.map((step) => ({ ...step })) : []
+      editing.value.steps = Array.isArray(scenario.steps) ? scenario.steps : []
     } catch {
-      steps.value = []
+      editing.value.steps = []
     }
   }
 }
@@ -139,8 +146,8 @@ function setEditScenarioMode(event) {
   toggleStructured('edit')
 }
 
-function addStep() {
-  steps.value.push({ action: 'navigate', url: '' })
+function addStep(items) {
+  items.push({ action: 'navigate', url: '' })
 }
 
 function removeStep(index) {
@@ -148,7 +155,7 @@ function removeStep(index) {
 }
 
 async function saveEdit() {
-  const scenario = editing.value.structured ? encodeSteps() : editing.value.scenario
+  const scenario = editing.value.structured ? encodeSteps(editing.value.steps) : editing.value.scenario
   if (!scenario.trim()) return
   error.value = ''
   try {
@@ -161,11 +168,7 @@ async function saveEdit() {
 async function review(row, decision) {
   error.value = ''
   const body = { decision, reviewer: '当前用户' }
-  if (decision === 'reject') {
-    const next = window.prompt('修改后的场景描述（留空则不改）', row.scenario)
-    if (next === null) return
-    body.scenario = next
-  }
+  if (decision === 'reject') body.scenario = row.scenario
   try {
     await api.post(`/api/cases/${row.id}/review`, body)
     await load()
@@ -174,10 +177,12 @@ async function review(row, decision) {
 
 async function run(row) {
   error.value = ''
+  runSubmitting.value = row.id
   try {
-    await api.post(`/api/cases/${row.id}/run`, { version_id: runVersion.value })
-    alert('已提交执行，到「执行记录」查看')
+    const { run_id } = await api.post(`/api/cases/${row.id}/run`, { version_id: runVersion.value })
+    emit('open-run', run_id)
   } catch (e) { error.value = e.message }
+  finally { runSubmitting.value = '' }
 }
 
 async function openSchedule(row) {
@@ -216,8 +221,13 @@ async function deleteSchedule() {
 }
 
 function openEdit(row) {
-  editing.value = { ...row, structured: false }
-  steps.value = []
+  editing.value = { ...row, structured: false, steps: [] }
+  if (isStructuredUI(row)) toggleStructured('edit')
+}
+
+function isStructuredUI(row) {
+  if (row.type !== 'ui') return false
+  try { return Array.isArray(JSON.parse(row.scenario)?.steps) } catch { return false }
 }
 
 onMounted(load)
@@ -230,6 +240,7 @@ onMounted(load)
         <option value="">全部项目</option>
         <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
       </select>
+      <button type="button" :disabled="!projectId" :aria-expanded="showGeneration" @click="showGeneration = !showGeneration">按需求生成用例</button>
       <select v-model="statusFilter">
         <option value="">全部状态</option>
         <option value="draft">草稿</option>
@@ -244,7 +255,7 @@ onMounted(load)
       </select>
       <input v-if="!structured || form.type !== 'ui'" v-model="form.scenario" aria-label="场景描述" placeholder="场景描述" class="scenario" />
       <button v-if="form.type === 'ui'" type="button" @click="toggleStructured('new')">{{ structured ? '自然语言场景' : '结构化步骤' }}</button>
-      <label v-if="form.type === 'ui'">导入步骤 JSON<input type="file" name="scenario-file" accept=".json,application/json" @change="importScenario" /></label>
+      <label v-if="form.type === 'ui'">导入录制脚本<input type="file" name="scenario-file" accept=".json,application/json" @change="importScenario" /></label>
       <select v-model="form.requirement_id" title="关联需求">
         <option value="">无关联需求</option>
         <option v-for="r in requirements.filter((item) => item.project_id === projectId)" :key="r.id" :value="r.id">{{ r.code || r.title }}</option>
@@ -291,7 +302,7 @@ onMounted(load)
         </template>
         <button type="button" @click="removeStep(index)">移除</button>
       </div>
-      <button type="button" @click="addStep">添加步骤</button>
+      <button type="button" @click="addStep(steps)">添加步骤</button>
     </section>
     <p class="hint">草稿 → 待审核 → 已定稿；只有已定稿才用于正式回归</p>
     <label v-if="projectId">执行版本
@@ -300,8 +311,18 @@ onMounted(load)
         <option v-for="version in versions.filter((item) => item.project_id === projectId)" :key="version.id" :value="version.id">{{ version.name }}</option>
       </select>
     </label>
+    <CaseGenerationPanel
+      v-if="showGeneration && projectId && requirements.length"
+      :key="projectId"
+      :project-id="projectId"
+      :requirements="requirements"
+      :initial-requirement-id="generationTarget?.requirementId"
+      :initial-version-id="generationTarget?.versionId"
+      @generated="load"
+    />
+    <p v-else-if="showGeneration && projectId" class="hint">先在「需求」中添加或导入项目需求。</p>
   </header>
-  <p v-if="error" class="error">{{ error }}</p>
+  <p v-if="error" class="error" role="alert">{{ error }}</p>
 
   <DataTable :rows="filtered" :columns="columns" empty="还没有用例">
     <template #type="{ row }"><span class="mono">{{ TYPE_LABEL[row.type] || row.type }}</span></template>
@@ -314,7 +335,7 @@ onMounted(load)
           <button class="primary" @click="review(row, 'approve')">通过</button>
           <button @click="review(row, 'reject')">退回</button>
         </template>
-        <button v-if="row.status === 'approved'" @click="run(row)">执行</button>
+        <button v-if="row.status === 'approved'" :disabled="!!runSubmitting" @click="run(row)">{{ isStructuredUI(row) ? '回放' : '执行' }}</button>
         <button v-if="row.status === 'approved'" @click="openSchedule(row)">计划</button>
         <button @click="openEdit(row)">查看</button>
       </div>
@@ -336,7 +357,7 @@ onMounted(load)
       </label>
       <textarea v-if="!editing.structured" v-model="editing.scenario" name="scenario" aria-label="场景描述" required rows="7" />
       <section v-else class="step-editor" aria-label="编辑用例步骤">
-        <div v-for="(step, index) in steps" :key="index" class="step-row">
+        <div v-for="(step, index) in editing.steps" :key="index" class="step-row">
           <label>动作
             <select v-model="step.action" :name="`edit-step-${index}-action`">
               <option value="navigate">打开页面</option><option value="click">点击</option>
@@ -360,11 +381,11 @@ onMounted(load)
             <label>URL<input v-model="step.expected" :name="`edit-step-${index}-url`" required /></label>
             <label>匹配方式<select v-model="step.match" :name="`edit-step-${index}-match`"><option value="contains">包含</option><option value="equals">完全一致</option></select></label>
           </template>
-          <button type="button" @click="removeStep(index)">移除</button>
+          <button v-if="editing.status === 'draft'" type="button" @click="editing.steps.splice(index, 1)">移除</button>
         </div>
-        <button type="button" @click="addStep">添加步骤</button>
+        <button v-if="editing.status === 'draft'" type="button" @click="addStep(editing.steps)">添加步骤</button>
       </section>
-      <div class="schedule-actions"><button type="button" @click="editing = null">关闭</button><button class="primary" type="submit">保存场景</button></div>
+      <div class="schedule-actions"><button type="button" @click="editing = null">关闭</button><button v-if="editing.status === 'draft'" class="primary" type="submit">保存场景</button></div>
     </form>
   </div>
 

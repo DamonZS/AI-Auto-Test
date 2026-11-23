@@ -43,8 +43,15 @@ const draft = ref('')
 const current = ref('overview')
 const error = ref('')
 const viewKey = shallowRef(0)
+const selectedRun = ref('')
+const generationTarget = ref(null)
 
 const view = computed(() => NAV.find((n) => n.key === current.value))
+const viewProps = computed(() => {
+  if (current.value === 'runs') return { selectedRun: selectedRun.value }
+  if (current.value === 'cases') return { generationTarget: generationTarget.value }
+  return {}
+})
 
 onMounted(async () => {
   try {
@@ -58,8 +65,20 @@ onMounted(async () => {
 })
 
 function switchTo(key) {
+  selectedRun.value = ''
+  generationTarget.value = null
   current.value = key
   viewKey.value += 1
+}
+
+function openRun(id) {
+  switchTo('runs')
+  selectedRun.value = id
+}
+
+function generateCases(target) {
+  switchTo('cases')
+  generationTarget.value = target
 }
 
 function enter(id) {
@@ -206,7 +225,7 @@ function leave() {
 
     <main>
       <h2>{{ view.label }}</h2>
-      <component :is="view.comp" :key="viewKey" />
+      <component :is="view.comp" :key="viewKey" v-bind="viewProps" @open-run="openRun" @generate-cases="generateCases" />
     </main>
   </div>
 </template>

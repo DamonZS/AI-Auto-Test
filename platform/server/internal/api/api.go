@@ -52,6 +52,7 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /api/requirements", s.tenant(s.listRequirements))
 	mux.HandleFunc("POST /api/requirements", s.tenant(s.createRequirement))
+	s.registerRequirements(mux)
 
 	mux.HandleFunc("GET /api/versions", s.tenant(s.listVersions))
 	mux.HandleFunc("POST /api/versions", s.tenant(s.createVersion))
@@ -61,6 +62,7 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /api/cases", s.tenant(s.listCases))
 	mux.HandleFunc("POST /api/cases", s.tenant(s.createCase))
+	s.registerCaseGenerationRoutes(mux)
 	mux.HandleFunc("GET /api/suites", s.tenant(s.listSuites))
 	mux.HandleFunc("POST /api/suites", s.tenant(s.createSuite))
 	mux.HandleFunc("PATCH /api/suites/{id}", s.tenant(s.updateSuiteConcurrency))

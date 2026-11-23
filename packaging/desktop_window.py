@@ -7,6 +7,8 @@ from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMenu, QSystemTrayIcon
 
+from desktop_recorder import RecorderDialog
+
 
 class WorkbenchPage(QWebEnginePage):
     def __init__(self, url, parent):
@@ -35,6 +37,12 @@ class DesktopWindow(QMainWindow):
         self.setCentralWidget(browser)
         browser.setUrl(url)
 
+        self.recorder = RecorderDialog(self)
+        toolbar = self.addToolBar("用例")
+        toolbar.setMovable(False)
+        toolbar.addAction("录制用例", self.show_recorder)
+        app.aboutToQuit.connect(self.recorder.shutdown)
+
         self.tray = QSystemTrayIcon(icon, self)
         self.tray.setToolTip("Auto-Test")
         menu = QMenu(self)
@@ -43,6 +51,11 @@ class DesktopWindow(QMainWindow):
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self.activate_from_tray)
         self.tray.show()
+
+    def show_recorder(self):
+        self.recorder.show()
+        self.recorder.raise_()
+        self.recorder.activateWindow()
 
     def save_download(self, download):
         suggested = Path(download.downloadDirectory()) / download.suggestedFileName()

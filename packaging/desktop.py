@@ -93,6 +93,7 @@ def serve(args, stop_file, log):
                 time.sleep(2)
         else:
             sys.path.insert(0, str(PAYLOAD / "site"))
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = env["PLAYWRIGHT_BROWSERS_PATH"]
             from desktop_window import run_desktop_window
 
             run_desktop_window(server, PAYLOAD / "app-icon.png", args.data_dir / "show.request", keep_running)

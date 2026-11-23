@@ -27,7 +27,7 @@ func (s *Server) runCase(w http.ResponseWriter, r *http.Request, tid string) {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if generationMode == "sampling" && caseStatus != "approved" {
+	if (generationMode == "sampling" || generationMode == "platform_llm") && caseStatus != "approved" {
 		fail(w, http.StatusConflict, "模型生成的用例须人工定稿后运行")
 		return
 	}

@@ -38,6 +38,12 @@ func Open(path string) (*Store, error) {
 	if err := MigrateCoverage(db); err != nil {
 		return nil, err
 	}
+	if err := MigrateRequirements(db); err != nil {
+		return nil, err
+	}
+	if err := MigrateCaseGeneration(db); err != nil {
+		return nil, err
+	}
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_runs_batch_status ON runs (tenant_id, suite_run_id, status)"); err != nil {
 		return nil, err
 	}

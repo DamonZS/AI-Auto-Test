@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from queue import Empty, SimpleQueue
 import sys
 from threading import Thread
@@ -79,9 +80,14 @@ _CAPTURE = r"""
 
 async def record_ui_case(
     url: str, wait_for_stop: Callable[[Page], Awaitable[bool]], *, headless: bool = False,
+    startup_decision: asyncio.Future[bool] | None = None,
 ) -> dict | None:
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.hostname or parts.username is not None:
+    try:
+        parts = urlsplit(url)
+        allowed = parts.scheme in ("http", "https") and parts.hostname and parts.username is None
+    except ValueError:
+        allowed = False
+    if not allowed:
         raise ValueError("录制需要不含账号密码的 HTTP(S) URL")
 
     async with async_playwright() as playwright:
@@ -90,10 +96,28 @@ async def record_ui_case(
             context = await browser.new_context()
             page = await context.new_page()
             events = await _capture_events(page)
-            await page.goto(url, wait_until="domcontentloaded")
+            if not await _open_recording_page(page, url, startup_decision):
+                return None
             return convert_recorded_steps(events) if await wait_for_stop(page) else None
         finally:
             await browser.close()
+
+
+async def _open_recording_page(page: Page, url: str, decision: asyncio.Future[bool] | None) -> bool:
+    if decision is None:
+        await page.goto(url, wait_until="domcontentloaded")
+        return True
+    if decision.done() and not decision.result():
+        return False
+    navigation = asyncio.create_task(page.goto(url, wait_until="domcontentloaded"))
+    await asyncio.wait((navigation, decision), return_when=asyncio.FIRST_COMPLETED)
+    if decision.done() and not decision.result():
+        await page.close()
+        with suppress(Error):
+            await navigation
+        return False
+    await navigation
+    return True
 
 
 async def _capture_events(page: Page) -> list[dict[str, str]]:

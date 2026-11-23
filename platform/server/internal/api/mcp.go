@@ -204,7 +204,7 @@ func (s *Server) mcpCreateTask(tid string, args map[string]any) (any, error) {
 	versionID, _ := args["version_id"].(string)
 	queued, err := s.st.DB.Exec(`INSERT INTO runs (id, tenant_id, case_id, version_id, dataset_id, data_row_id)
 		SELECT ?, tenant_id, id, ?, ?, ? FROM cases WHERE id = ? AND tenant_id = ?
-		AND (generation_mode <> 'sampling' OR status = 'approved')`, runID, versionID, datasetID, rowID, caseID, tid)
+		AND (generation_mode NOT IN ('sampling', 'platform_llm') OR status = 'approved')`, runID, versionID, datasetID, rowID, caseID, tid)
 	if err != nil {
 		return nil, err
 	}
