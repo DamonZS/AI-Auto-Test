@@ -1,6 +1,9 @@
 package store
 
-import "database/sql"
+import (
+	"database/sql"
+	"strings"
+)
 
 func MigrateCaseGeneration(db *sql.DB) error {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS case_generation_sources (
@@ -13,5 +16,12 @@ func MigrateCaseGeneration(db *sql.DB) error {
 		FOREIGN KEY (tenant_id, requirement_id, revision_no)
 			REFERENCES requirement_revisions (tenant_id, requirement_id, revision_no)
 	)`)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec("ALTER TABLE case_generation_sources ADD COLUMN review_id TEXT NOT NULL DEFAULT ''")
+	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
 	return err
 }

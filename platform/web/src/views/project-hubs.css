@@ -1,0 +1,19 @@
+.hub { display: grid; gap: 14px; min-width: 0; }
+.hub-toolbar, .hub-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.hub-grow { flex: 1 1 160px; }
+.hub-panel { padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.hub-panel h3, .hub-panel p, .hub-notice, .hub-error { margin: 0; }
+.hub-panel h3 { font-size: 15px; font-weight: 600; }
+.hub-form { display: grid; gap: 12px; }
+.hub-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 10px; }
+.hub-field { display: grid; gap: 4px; min-width: 0; font-size: 13px; }
+.hub-field select { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.hub-field input, .hub-field select { width: 100%; }
+.hub button:focus-visible, .hub input:focus-visible, .hub select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hub button:disabled { opacity: .6; cursor: default; }
+.hub-error { color: var(--bad); }
+.hub-notice { color: var(--ok); }
+@media (pointer: coarse) {
+  .hub button, .hub-field input, .hub-field select { min-height: 48px; }
+  .hub-field input, .hub-field select { font-size: 1rem; }
+}

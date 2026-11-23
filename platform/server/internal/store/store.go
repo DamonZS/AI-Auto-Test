@@ -41,6 +41,12 @@ func Open(path string) (*Store, error) {
 	if err := MigrateRequirements(db); err != nil {
 		return nil, err
 	}
+	if err := MigrateProjectWorkspace(db); err != nil {
+		return nil, err
+	}
+	if err := MigrateRequirementPoints(db); err != nil {
+		return nil, err
+	}
 	if err := MigrateCaseGeneration(db); err != nil {
 		return nil, err
 	}
@@ -61,13 +67,23 @@ func migrateAdditiveColumns(db *sql.DB) error {
 		"ALTER TABLE tenant_settings ADD COLUMN playwright_browser TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE cases ADD COLUMN dataset_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE cases ADD COLUMN data_row_id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE cases ADD COLUMN review_feedback TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE cases ADD COLUMN review_feedback_version INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE bugs ADD COLUMN repro_steps TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE bugs ADD COLUMN expected_result TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE bugs ADD COLUMN actual_result TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE bugs ADD COLUMN assignee TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE bugs ADD COLUMN discovered_version_id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE bugs ADD COLUMN fixed_version_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE runs ADD COLUMN dataset_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE runs ADD COLUMN data_row_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE runs ADD COLUMN suite_run_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE runs ADD COLUMN performance_json TEXT NOT NULL DEFAULT 'null'",
 		"ALTER TABLE suites ADD COLUMN case_ids TEXT NOT NULL DEFAULT '[]'",
+		"ALTER TABLE suites ADD COLUMN project_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE suites ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 1 CHECK (max_concurrency > 0)",
 		"ALTER TABLE suite_runs ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 1 CHECK (max_concurrency > 0)",
+		"ALTER TABLE test_data_sets ADD COLUMN generation_source TEXT NOT NULL DEFAULT 'rule' CHECK (generation_source IN ('rule', 'ai'))",
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil && !strings.Contains(err.Error(), "duplicate column name") {

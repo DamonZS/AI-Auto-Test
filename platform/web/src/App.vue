@@ -1,7 +1,9 @@
 <script setup>
 import { computed, onMounted, ref, shallowRef } from 'vue'
 import { api, setSessionExpiredHandler, setTenant } from './api'
+import AppIcon from './components/AppIcon.vue'
 import LoginForm from './components/LoginForm.vue'
+import ProjectJourney from './components/ProjectJourney.vue'
 import OverviewView from './views/OverviewView.vue'
 import ProjectsView from './views/ProjectsView.vue'
 import RequirementsView from './views/RequirementsView.vue'
@@ -26,7 +28,7 @@ const NAV = [
   { key: 'test-data', label: '测试数据', comp: TestDataView },
   { key: 'cases', label: '用例', comp: CasesView },
   { key: 'suites', label: '套件', comp: SuitesView },
-  { key: 'workbench', label: '企业流程', comp: WorkbenchView },
+  { key: 'workbench', label: '流程与报告', comp: WorkbenchView },
   { key: 'runs', label: '执行记录', comp: RunsView },
   { key: 'bugs', label: '缺陷', comp: BugsView },
   { key: 'patches', label: '自愈审批', comp: PatchesView },
@@ -47,12 +49,22 @@ const error = ref('')
 const viewKey = shallowRef(0)
 const selectedRun = ref('')
 const generationTarget = ref(null)
+const projects = ref([])
+const projectId = ref('')
+const projectPages = new Set(['requirements', 'versions', 'environments', 'test-data', 'cases', 'suites', 'workbench', 'runs', 'bugs'])
+const navGroups = [
+  { label: '工作区', keys: ['overview', 'projects'] },
+  { label: '测试准备', keys: ['requirements', 'versions', 'environments', 'test-data', 'cases', 'suites'] },
+  { label: '质量交付', keys: ['runs', 'bugs', 'workbench', 'patches'] },
+  { label: '平台', keys: ['mcp', 'settings'] },
+].map((group) => ({ label: group.label, pages: group.keys.map((key) => NAV.find((item) => item.key === key)) }))
 
 const view = computed(() => NAV.find((n) => n.key === current.value))
 const viewProps = computed(() => {
-  if (current.value === 'runs') return { selectedRun: selectedRun.value }
-  if (current.value === 'cases') return { generationTarget: generationTarget.value }
-  return {}
+  const scope = { projectId: projectId.value }
+  if (current.value === 'runs') return { ...scope, selectedRun: selectedRun.value }
+  if (current.value === 'cases') return { ...scope, generationTarget: generationTarget.value }
+  return projectPages.has(current.value) ? scope : {}
 })
 
 onMounted(async () => {
@@ -73,12 +85,43 @@ function switchTo(key) {
   viewKey.value += 1
 }
 
+async function refreshProjects() {
+  const workspace = tenantId.value
+  if (!workspace) return
+  try {
+    const items = await api.get('/api/projects')
+    if (tenantId.value !== workspace) return
+    projects.value = items
+  } catch (problem) {
+    if (tenantId.value === workspace) error.value = problem.message
+  }
+}
+
+function openProject(id) {
+  projectId.value = id
+  switchTo('requirements')
+  refreshProjects()
+}
+
+function openProjectView(target) {
+  if (!NAV.some((item) => item.key === target.view)) return
+  if (target.projectId) projectId.value = target.projectId
+  switchTo(target.view)
+  refreshProjects()
+}
+
+function selectProject() {
+  if (!projectPages.has(current.value)) switchTo(projectId.value ? 'requirements' : 'projects')
+  else switchTo(current.value)
+}
+
 function openRun(id) {
   switchTo('runs')
   selectedRun.value = id
 }
 
 function generateCases(target) {
+  if (target.projectId) projectId.value = target.projectId
   switchTo('cases')
   generationTarget.value = target
 }
@@ -87,7 +130,10 @@ function enter(id) {
   error.value = ''
   setTenant(id)
   tenantId.value = id
+  projects.value = []
+  projectId.value = ''
   switchTo('overview')
+  refreshProjects()
 }
 
 async function loadMemberships() {
@@ -135,6 +181,8 @@ function resetWorkspace() {
   setTenant('')
   tenantId.value = ''
   draft.value = ''
+  projects.value = []
+  projectId.value = ''
   switchTo('overview')
 }
 
@@ -211,23 +259,46 @@ function leave() {
 
   <div v-else class="shell">
     <aside>
-      <div class="brand">测试平台</div>
-      <nav>
-        <button
-          v-for="n in NAV"
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><AppIcon name="overview" /></span>测试平台</div>
+      <nav aria-label="工作台导航">
+        <div v-for="group in navGroups" :key="group.label" class="nav-group">
+          <span>{{ group.label }}</span>
+          <button
+          v-for="n in group.pages"
           :key="n.key"
+          type="button"
           :class="{ on: current === n.key }"
+          :aria-current="current === n.key ? 'page' : undefined"
           @click="switchTo(n.key)"
-        >{{ n.label }}</button>
+        >
+          <AppIcon :name="n.key" />
+          <span>{{ n.label }}</span>
+          </button>
+        </div>
       </nav>
-      <button class="leave" :disabled="busy" @click="leave">切换工作区</button>
-      <button class="ghost" :disabled="busy" @click="logout">退出登录</button>
-      <p v-if="error" class="error" role="alert">{{ error }}</p>
+      <footer class="workspace-actions">
+        <p v-if="error" class="error" role="alert">{{ error }}</p>
+        <button type="button" :disabled="busy" @click="leave">切换工作区</button>
+        <button type="button" :disabled="busy" @click="logout">退出登录</button>
+      </footer>
     </aside>
 
     <main>
-      <h2>{{ view.label }}</h2>
-      <component :is="view.comp" :key="viewKey" v-bind="viewProps" @open-run="openRun" @generate-cases="generateCases" />
+      <header class="workbench-header">
+        <h2>{{ view.label }}</h2>
+        <label v-if="projects.length" class="scope-switch">当前项目
+          <select v-model="projectId" @change="selectProject">
+            <option value="">全部项目</option>
+            <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
+          </select>
+        </label>
+        <button v-else-if="current !== 'projects'" type="button" @click="switchTo('projects')">进入项目管理</button>
+      </header>
+      <ProjectJourney v-if="projectId && projectPages.has(current)" :page="current" @navigate="switchTo" />
+      <div :key="viewKey" class="workbench-page">
+        <component :is="view.comp" v-bind="viewProps" @open-run="openRun" @generate-cases="generateCases"
+          @open-project="openProject" @open-project-view="openProjectView" @projects-changed="refreshProjects" />
+      </div>
     </main>
   </div>
 </template>
@@ -243,15 +314,25 @@ function leave() {
 aside {
   width: 196px;
   flex: 0 0 196px;
+  align-self: flex-start;
+  position: sticky;
+  top: 0;
+  height: 100dvh;
   background: var(--panel);
   border-right: 1px solid var(--line);
   padding: 18px 12px;
   display: flex;
   flex-direction: column;
 }
-.brand { font-weight: 600; padding: 0 8px 18px; }
-nav { display: flex; flex-direction: column; gap: 2px; }
+.brand { display: flex; flex-shrink: 0; align-items: center; gap: 9px; font-weight: 700; padding: 0 8px 18px; }
+.brand-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; color: white; background: var(--accent); }
+aside nav { display: flex; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; flex-direction: column; gap: 12px; padding: 3px; }
+.nav-group { display: grid; gap: 2px; }
+.nav-group > span { padding: 0 10px 4px; color: var(--muted); font-size: 11px; }
 nav button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   border: 0;
   background: transparent;
   text-align: left;
@@ -259,10 +340,20 @@ nav button {
   color: var(--muted);
   border-radius: 6px;
 }
-nav button.on { background: #eef1fe; color: var(--accent); font-weight: 500; }
-.leave { margin-top: auto; border: 0; background: transparent; color: var(--muted); text-align: left; padding: 8px 10px; font-size: 12px; }
+nav button:hover { background: var(--bg); color: var(--text); }
+nav button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.workspace-actions { display: grid; flex-shrink: 0; gap: 2px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.workspace-actions button { border: 0; background: transparent; color: var(--muted); text-align: left; padding: 6px 10px; }
+.workspace-actions button:enabled:hover { background: var(--bg); color: var(--text); }
 
-main { flex: 1; padding: 22px 30px 40px; max-width: 1180px; }
-main h2 { font-size: 17px; font-weight: 600; margin: 0 0 18px; }
+main { flex: 1; min-width: 0; padding: 24px clamp(16px, 2.4vw, 36px) 40px; max-width: 1500px; }
+.workbench-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.workbench-header h2 { font-size: 22px; font-weight: 700; margin: 0; }
+.scope-switch { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.scope-switch select { max-width: 200px; }
 .error { color: var(--bad); font-size: 12px; margin: 0; }
+@media (max-width: 740px) {
+  aside { width: 130px; flex-basis: 130px; padding-inline: 6px; }
+  nav button { padding-inline: 7px; }
+}
 </style>

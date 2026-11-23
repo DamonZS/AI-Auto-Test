@@ -7,21 +7,18 @@ import (
 )
 
 func (s *Server) trends(w http.ResponseWriter, r *http.Request, tid string) {
-	comparison, err := s.loadTrendComparison(r.Context(), tid, time.Now())
+	now := time.Now().UTC()
+	comparison, err := s.loadTrendComparison(r.Context(), tid, now)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "无法读取趋势对比")
 		return
 	}
 
-	rows, _ := s.st.DB.Query(`SELECT substr(started_at,1,10) AS day,
-		count(*) AS total,
-		COALESCE(sum(CASE WHEN passed = 1 THEN 1 ELSE 0 END),0) AS passed,
-		COALESCE(sum(CASE WHEN passed = 0 THEN 1 ELSE 0 END),0) AS failed,
-		COALESCE(sum(CASE WHEN needs_review = 1 THEN 1 ELSE 0 END),0) AS needs_review,
-		COALESCE(sum(self_healed),0) AS self_healed
-		FROM runs WHERE tenant_id = ? AND passed IS NOT NULL
-		GROUP BY day ORDER BY day DESC LIMIT 30`, tid)
-	days, _ := rowsToMaps(rows)
+	days, err := s.loadTrendDays(r.Context(), tid, now)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法读取每日趋势")
+		return
+	}
 
 	sev, _ := s.st.DB.Query(`SELECT severity, count(*) AS n FROM bugs WHERE tenant_id = ?
 		GROUP BY severity ORDER BY severity`, tid)
@@ -48,6 +45,59 @@ func (s *Server) trends(w http.ResponseWriter, r *http.Request, tid string) {
 		"closed_bugs":  closed,
 		"comparison":   comparison,
 	})
+}
+
+type trendDay struct {
+	Day         string `json:"day"`
+	Total       int    `json:"total"`
+	Passed      int    `json:"passed"`
+	Failed      int    `json:"failed"`
+	NeedsReview int    `json:"needs_review"`
+	Error       int    `json:"error"`
+	SelfHealed  int    `json:"self_healed"`
+	NewBugs     int    `json:"new_bugs"`
+}
+
+func (s *Server) loadTrendDays(ctx context.Context, tenantID string, now time.Time) ([]trendDay, error) {
+	today := now.UTC()
+	start := today.AddDate(0, 0, -29).Format(time.DateOnly)
+	end := today.AddDate(0, 0, 1).Format(time.DateOnly)
+	rows, err := s.st.DB.QueryContext(ctx, `WITH RECURSIVE days(day) AS (
+		VALUES (?)
+		UNION ALL
+		SELECT date(day, '+1 day') FROM days WHERE date(day, '+1 day') < ?
+	), run_days AS (
+		SELECT substr(ended_at, 1, 10) AS day, count(*) AS total,
+			count(*) FILTER (WHERE status = 'passed' AND needs_review = 0) AS passed,
+			count(*) FILTER (WHERE status = 'failed' AND needs_review = 0) AS failed,
+			count(*) FILTER (WHERE status = 'needs_review' OR needs_review = 1) AS needs_review,
+			count(*) FILTER (WHERE status = 'error' AND needs_review = 0) AS error,
+			sum(self_healed) AS self_healed
+		FROM runs WHERE tenant_id = ? AND ended_at >= ? AND ended_at < ? AND status NOT IN ('queued', 'running')
+		GROUP BY day
+	), bug_days AS (
+		SELECT substr(created_at, 1, 10) AS day, count(*) AS new_bugs
+		FROM bugs WHERE tenant_id = ? AND created_at >= ? AND created_at < ?
+		GROUP BY day
+	)
+	SELECT days.day, COALESCE(run_days.total, 0), COALESCE(run_days.passed, 0), COALESCE(run_days.failed, 0),
+		COALESCE(run_days.needs_review, 0), COALESCE(run_days.error, 0), COALESCE(run_days.self_healed, 0),
+		COALESCE(bug_days.new_bugs, 0)
+	FROM days LEFT JOIN run_days USING (day) LEFT JOIN bug_days USING (day) ORDER BY days.day`,
+		start, end, tenantID, start, end, tenantID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	days := make([]trendDay, 0, 30)
+	for rows.Next() {
+		var day trendDay
+		if err := rows.Scan(&day.Day, &day.Total, &day.Passed, &day.Failed, &day.NeedsReview, &day.Error, &day.SelfHealed, &day.NewBugs); err != nil {
+			return nil, err
+		}
+		days = append(days, day)
+	}
+	return days, rows.Err()
 }
 
 type trendMonth struct {

@@ -2,6 +2,8 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { api } from '../api'
 
+const props = defineProps({ projectId: { type: String, default: '' } })
+const emit = defineEmits(['open-project-view'])
 const collection = '/api/workbench/documents'
 const labels = { draft: '草稿', in_review: '待审核', approved: '已批准', rejected: '已驳回' }
 const percent = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1 })
@@ -9,7 +11,7 @@ const templates = ref([])
 const projects = ref([])
 const versions = ref([])
 const documents = ref([])
-const create = ref({ kind: '', project_id: '', version_id: '', title: '' })
+const create = ref({ kind: '', project_id: props.projectId, version_id: '', title: '' })
 const generationContext = ref('')
 const selected = ref(null)
 const draft = ref(null)
@@ -25,6 +27,9 @@ const template = computed(() => templates.value.find((item) => item.kind === sel
 const editable = computed(() => ['draft', 'rejected'].includes(selected.value?.status))
 const documentPath = computed(() => selected.value ? `${collection}/${encodeURIComponent(selected.value.id)}` : '')
 const metrics = computed(() => selected.value?.metrics)
+const scopedDocuments = computed(() => props.projectId
+  ? documents.value.filter((document) => document.project_id === props.projectId)
+  : documents.value)
 
 function selectDocument(document) {
   selected.value = document
@@ -124,6 +129,12 @@ onMounted(() => perform(async () => {
 
 <template>
   <div class="workbench">
+    <section class="panel lifecycle" aria-label="测试产物与流程">
+      <div><strong>测试准备</strong><span>申请、计划、准入与同行评审</span></div>
+      <div><strong>执行跟踪</strong><span>回归执行、缺陷与日报</span></div>
+      <div><strong>质量交付</strong><span>准出核验、签核与总结报告</span></div>
+      <button v-if="projectId && !availableVersions.length" type="button" @click="emit('open-project-view', { projectId, view: 'versions' })">登记项目版本</button>
+    </section>
     <form class="panel" :action="collection" method="post" aria-labelledby="wb-new"
       @submit.prevent="perform(() => createDocument($event.submitter?.value === 'generate'))">
       <h3 id="wb-new">新建产物</h3>
@@ -131,7 +142,7 @@ onMounted(() => perform(async () => {
         <label>类型<select v-model="create.kind" name="kind" required>
           <option v-for="item in templates" :key="item.kind" :value="item.kind">{{ item.label }}</option>
         </select></label>
-        <label>项目<select v-model="create.project_id" name="project_id" required @change="create.version_id = ''">
+        <label>项目<select v-model="create.project_id" name="project_id" :disabled="!!projectId" required @change="create.version_id = ''">
           <option value="" disabled>选择项目</option>
           <option v-for="item in projects" :key="item.id" :value="item.id">{{ item.name }}</option>
         </select></label>
@@ -159,9 +170,9 @@ onMounted(() => perform(async () => {
     <div class="columns">
       <section class="panel" aria-labelledby="wb-list">
         <h3 id="wb-list">流程产物</h3>
-        <p v-if="!documents.length && !busy">暂无流程产物</p>
+        <p v-if="!scopedDocuments.length && !busy">暂无流程产物</p>
         <ul class="documents">
-          <li v-for="item in documents" :key="item.id">
+          <li v-for="item in scopedDocuments" :key="item.id">
             <button type="button" :disabled="busy" :aria-current="selected?.id === item.id ? 'true' : undefined"
               @click="perform(async () => selectDocument(await api.get(`${collection}/${encodeURIComponent(item.id)}`)))">
               <strong>{{ item.title }}</strong>
@@ -257,6 +268,9 @@ onMounted(() => perform(async () => {
 </template>
 
 <style scoped>
+.lifecycle { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
+.lifecycle > div { display: grid; gap: 3px; }
+.lifecycle span { color: var(--muted); font-size: 12px; }
 .workbench { display: grid; gap: 14px; }
 .panel { padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
 .columns { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr); align-items: start; gap: 14px; }

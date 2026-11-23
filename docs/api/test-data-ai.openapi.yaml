@@ -1,0 +1,64 @@
+openapi: 3.1.0
+info:
+  title: AI 合成测试数据
+  version: 1.0.0
+paths:
+  /api/test-data/generate:
+    post:
+      summary: 生成并保存测试数据集
+      security:
+        - session: []
+      parameters:
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, count]
+              anyOf:
+                - required: [fields]
+                  properties:
+                    fields: {minItems: 1}
+                - required: [prompt]
+                  properties:
+                    prompt: {minLength: 1}
+              properties:
+                project_id: {type: string, minLength: 1}
+                environment_id: {type: string}
+                prompt: {type: string, description: 可选场景说明，应当只包含合成测试要求}
+                count: {type: integer, minimum: 1, maximum: 30}
+                fields:
+                  type: array
+                  uniqueItems: true
+                  items:
+                    type: string
+                    enum: [customer_name, customer_id, username, password, email, phone, document_type, document_number, company_name, contact_name, province, city, address, postal_code, birth_date, member_level, account_status, order_number, amount, quantity, order_date, order_status]
+      responses:
+        '201':
+          description: 已生成并保存
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, name, record_count]
+                properties:
+                  id: {type: string}
+                  name: {type: string}
+                  record_count: {type: integer}
+        '400': {description: 输入无效}
+        '401': {description: 缺少有效的用户会话}
+        '403': {description: 当前角色没有写入权限}
+        '404': {description: 项目或所选环境不可用}
+        '422': {description: 模型未配置或说明中检测到凭据}
+        '502': {description: 模型请求或输出校验失败，数据集未保存}
+        '500': {description: 平台内部错误}
+components:
+  securitySchemes:
+    session:
+      type: http
+      scheme: bearer

@@ -83,14 +83,18 @@ func (s *Server) generateData(w http.ResponseWriter, r *http.Request, tid string
 		return
 	}
 	did := r.PathValue("id")
-	var fieldsJSON string
-	err := s.st.DB.QueryRow("SELECT fields_json FROM test_data_sets WHERE id = ? AND tenant_id = ?", did, tid).Scan(&fieldsJSON)
+	var fieldsJSON, source string
+	err := s.st.DB.QueryRow("SELECT fields_json, generation_source FROM test_data_sets WHERE id = ? AND tenant_id = ?", did, tid).Scan(&fieldsJSON, &source)
 	if err == sql.ErrNoRows {
 		fail(w, http.StatusNotFound, "测试数据集不存在")
 		return
 	}
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if source != "rule" {
+		fail(w, http.StatusConflict, "AI 数据集不支持规则重新生成")
 		return
 	}
 	fields := parseFields(fieldsJSON)

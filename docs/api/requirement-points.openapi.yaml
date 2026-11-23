@@ -1,0 +1,181 @@
+openapi: 3.0.3
+info:
+  title: 需求功能点工作台 API
+  version: 1.0.0
+security:
+  - webSession: []
+paths:
+  /api/requirements/{id}/point-analyses:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - $ref: '#/components/parameters/Requirement'
+    get:
+      summary: 查看源修订的评审轮次与版本关联
+      parameters:
+        - name: revision_no
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/PositiveNumber' }
+      responses:
+        '200':
+          description: 轮次按新到旧排列
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rounds, version_ids]
+                properties:
+                  rounds:
+                    type: array
+                    items: { $ref: '#/components/schemas/Round' }
+                  version_ids:
+                    type: array
+                    items: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      summary: 解析需求修订并生成第一轮草稿
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [revision_no]
+              properties:
+                revision_no: { $ref: '#/components/schemas/PositiveNumber' }
+      responses:
+        '201': { $ref: '#/components/responses/Analysis' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/requirements/{id}/point-analyses/{analysisId}:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - $ref: '#/components/parameters/Requirement'
+      - $ref: '#/components/parameters/Analysis'
+    get:
+      summary: 查看评审轮次及功能点
+      responses:
+        '200': { $ref: '#/components/responses/Analysis' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/requirements/{id}/point-analyses/{analysisId}/review:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - $ref: '#/components/parameters/Requirement'
+      - $ref: '#/components/parameters/Analysis'
+    post:
+      summary: 提交、退回或批准功能点轮次
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [action]
+                  properties:
+                    action: { type: string, enum: [submit] }
+                - type: object
+                  additionalProperties: false
+                  required: [action, feedback]
+                  properties:
+                    action: { type: string, enum: [return] }
+                    feedback: { type: string, minLength: 1, maxLength: 2000 }
+                - type: object
+                  additionalProperties: false
+                  required: [action]
+                  properties:
+                    action: { type: string, enum: [approve] }
+                    version_id: { type: string, description: 已关联到源修订的登记版本 }
+      responses:
+        '200': { $ref: '#/components/responses/Analysis' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/requirements/{id}/point-analyses/{analysisId}/optimize:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - $ref: '#/components/parameters/Requirement'
+      - $ref: '#/components/parameters/Analysis'
+    post:
+      summary: 使用退回意见生成下一轮草稿
+      responses:
+        '201': { $ref: '#/components/responses/Analysis' }
+        default: { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    webSession:
+      type: http
+      scheme: bearer
+  parameters:
+    Tenant:
+      name: X-Tenant-Id
+      in: header
+      required: true
+      schema: { type: string }
+    Requirement:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Analysis:
+      name: analysisId
+      in: path
+      required: true
+      schema: { type: string }
+  schemas:
+    PositiveNumber:
+      type: integer
+      minimum: 1
+    Round:
+      type: object
+      required: [id, requirement_id, project_id, revision_no, round_no, status, created_at]
+      properties:
+        id: { type: string }
+        requirement_id: { type: string }
+        project_id: { type: string }
+        revision_no: { $ref: '#/components/schemas/PositiveNumber' }
+        round_no: { $ref: '#/components/schemas/PositiveNumber' }
+        parent_analysis_id: { type: string }
+        status: { type: string, enum: [draft, submitted, returned, approved] }
+        feedback: { type: string }
+        version_id: { type: string }
+        created_at: { type: string }
+        submitted_by: { type: string }
+        submitted_at: { type: string }
+        reviewed_by: { type: string }
+        reviewed_at: { type: string }
+    Analysis:
+      allOf:
+        - $ref: '#/components/schemas/Round'
+        - type: object
+          required: [points]
+          properties:
+            points:
+              type: array
+              minItems: 1
+              maxItems: 20
+              items:
+                type: object
+                required: [title, description, acceptance_criteria]
+                properties:
+                  title: { type: string, minLength: 1, maxLength: 160 }
+                  description: { type: string, minLength: 1, maxLength: 1200 }
+                  acceptance_criteria:
+                    type: array
+                    minItems: 1
+                    maxItems: 8
+                    items: { type: string, minLength: 1, maxLength: 500 }
+  responses:
+    Analysis:
+      description: 评审轮次及功能点
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Analysis' }
+    Error:
+      description: 400 请求无效、401 会话失效、403 权限不足、404 资源不存在、409 轮次冲突、413 请求过大、422 配置或源不符合要求、500 内部错误、502 模型失败。
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { type: string }

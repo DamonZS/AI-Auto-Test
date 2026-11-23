@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"net/http"
 	"strings"
+
+	"platform/server/internal/store"
 )
 
 const tenantHeader = "X-Tenant-Id"
@@ -153,20 +155,13 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request, tid string
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request, tid string) {
-	var body struct {
-		Name         string `json:"name"`
-		BaseURL      string `json:"base_url"`
-		AllowedHosts string `json:"allowed_hosts"`
-	}
-	if err := decode(r, &body); err != nil || body.Name == "" || body.BaseURL == "" {
-		fail(w, http.StatusBadRequest, "name 与 base_url 必填")
+	var body store.ProjectEdit
+	if err := decode(r, &body); err != nil || body.Name == nil || body.BaseURL == nil || !validProjectEdit(body) {
+		fail(w, http.StatusBadRequest, "请填写有效的项目名称、目标地址和项目状态")
 		return
 	}
 	pid := id()
-	_, err := s.st.DB.Exec(
-		"INSERT INTO projects (id, tenant_id, name, base_url, allowed_hosts) VALUES (?, ?, ?, ?, ?)",
-		pid, tid, body.Name, body.BaseURL, body.AllowedHosts)
-	if err != nil {
+	if err := s.st.CreateProject(r.Context(), tid, pid, body); err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}

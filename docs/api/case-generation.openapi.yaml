@@ -10,6 +10,9 @@ paths:
       description: |
         Workspace owners and editors can generate drafts. When version_id is given, the highest
         revision linked to that project version is used. Otherwise the latest revision is used.
+        An optional review_id selects approved functional points and pins their requirement revision.
+        The review must belong to the same workspace and requirement. If version_id is also given,
+        the reviewed revision must be linked to that version.
         Once selected, that revision is preserved in the draft's source link even if the requirement
         is edited while the model is responding. The model receives requirement title and prose,
         and the requested test type. Source files and credentials must not be supplied in the requirement.
@@ -35,7 +38,8 @@ paths:
                 version_id:
                   type: string
                   description: Project version (omit to use the latest requirement revision).
-                type: { type: string, enum: [ui, api] }
+                review_id: { type: string, minLength: 1 }
+                type: { type: string, enum: [functional, ui, api, perf, security] }
       responses:
         '201':
           description: Every case, its first content revision and its requirement source link were saved together.
@@ -49,6 +53,7 @@ paths:
                   requirement_id: { type: string }
                   revision_no: { type: integer, minimum: 1 }
                   version_id: { type: string }
+                  review_id: { type: string }
                   generation_mode: { type: string, enum: [platform_llm] }
                   cases:
                     type: array
@@ -60,7 +65,7 @@ paths:
                       properties:
                         id: { type: string }
                         name: { type: string }
-                        type: { type: string, enum: [ui, api] }
+                        type: { type: string, enum: [functional, ui, api, perf, security] }
                         status: { type: string, enum: [draft] }
         '400':
           description: Invalid request or unsupported test type.
@@ -75,10 +80,10 @@ paths:
           description: Workspace access or write permission denied.
           content: *errorContent
         '404':
-          description: Requirement or project version is unavailable in the current workspace and project.
+          description: Requirement, project version or approved functional-point review is unavailable in the requested scope.
           content: *errorContent
         '422':
-          description: Version has no linked revision, requirement cannot be sent as prose, project URL is invalid for UI, or model settings are incomplete.
+          description: Version has no linked revision, the reviewed revision is outside the version, source prose or project URL is invalid, or model settings are incomplete.
           content: *errorContent
         '500':
           description: Configuration could not be decrypted or the draft transaction failed.
@@ -86,10 +91,96 @@ paths:
         '502':
           description: Model call failed or produced unusable output. No drafts were saved.
           content: *errorContent
+  /api/cases/{id}/review:
+    post:
+      operationId: reviewCaseWorkflow
+      summary: Submit a draft or record a human review decision
+      security: [{bearerSession: []}]
+      parameters: &reviewParameters
+        - { name: id, in: path, required: true, schema: {type: string} }
+        - { name: X-Tenant-Id, in: header, required: true, schema: {type: string, minLength: 1} }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [submit_review, approve, reject, deprecate, revise] }
+                feedback: { type: string, maxLength: 2000, description: Required for reject. }
+                scenario: { type: string, description: Used only by legacy manual revise. }
+      responses: &reviewResponses
+        '200':
+          description: Case state after the operation. Reviewer identity comes from the session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReviewState' }
+        '400': { description: Invalid request. }
+        '401': { description: Missing or invalid session. }
+        '403': { description: Workspace write permission denied. }
+        '404': { description: Case is unavailable in the current workspace. }
+        '409': { description: The case is no longer in the state required by the action. }
+        '422': { description: The scenario or review feedback cannot be used. }
+        '500': { description: The operation could not be stored. }
+  /api/cases/{id}/revise-with-ai:
+    post:
+      operationId: reviseCaseDraft
+      summary: Use saved human feedback to revise a returned draft
+      description: Saves a new content revision when successful. Requires explicit resubmission and approval.
+      security: [{bearerSession: []}]
+      parameters: *reviewParameters
+      responses:
+        <<: *reviewResponses
+        '502': { description: The model did not provide a usable changed draft. Existing content is preserved. }
+  /api/cases/{id}/manual-result:
+    post:
+      operationId: recordManualCaseResult
+      summary: Record a human result for an approved functional or security case
+      security: [{bearerSession: []}]
+      parameters: *reviewParameters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, report]
+              properties:
+                status: { type: string, enum: [passed, failed] }
+                report: { type: string, minLength: 1 }
+                version_id: { type: string }
+      responses:
+        '201':
+          description: The completed manual run was saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run_id, status]
+                properties:
+                  run_id: { type: string }
+                  status: { type: string, enum: [passed, failed] }
+        '400': { description: Invalid outcome or report. }
+        '401': { description: Missing or invalid session. }
+        '403': { description: Workspace write permission denied. }
+        '409': { description: The case is unavailable for manual recording or the project version does not match. }
+        '500': { description: The outcome could not be saved. }
 components:
   securitySchemes:
     bearerSession: { type: http, scheme: bearer }
   schemas:
+    ReviewState:
+      type: object
+      required: [id, status, version_no, reviewer, review_feedback, review_feedback_version]
+      properties:
+        id: { type: string }
+        decision: { type: string }
+        status: { type: string, enum: [draft, in_review, approved, deprecated] }
+        version_no: { type: integer, minimum: 1 }
+        reviewer: { type: string }
+        review_feedback: { type: string }
+        review_feedback_version: { type: integer, minimum: 0 }
     Error:
       type: object
       required: [error]

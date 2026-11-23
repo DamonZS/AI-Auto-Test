@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS test_data_sets (
   description TEXT NOT NULL DEFAULT '',
   fields_json TEXT NOT NULL DEFAULT '[]',
   record_count INTEGER NOT NULL DEFAULT 0,
+  generation_source TEXT NOT NULL DEFAULT 'rule' CHECK (generation_source IN ('rule', 'ai')),
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

@@ -18,10 +18,10 @@ type performanceResult struct {
 
 func (s *Server) runCase(w http.ResponseWriter, r *http.Request, tid string) {
 	cid := r.PathValue("id")
-	var projectID, datasetID, dataRowID, generationMode, caseStatus string
+	var projectID, datasetID, dataRowID, generationMode, caseStatus, caseType string
 	err := s.st.DB.QueryRow(
-		"SELECT project_id, dataset_id, data_row_id, generation_mode, status FROM cases WHERE id = ? AND tenant_id = ?", cid, tid,
-	).Scan(&projectID, &datasetID, &dataRowID, &generationMode, &caseStatus)
+		"SELECT project_id, dataset_id, data_row_id, generation_mode, status, type FROM cases WHERE id = ? AND tenant_id = ?", cid, tid,
+	).Scan(&projectID, &datasetID, &dataRowID, &generationMode, &caseStatus, &caseType)
 	if err == sql.ErrNoRows {
 		fail(w, http.StatusNotFound, "用例不存在")
 		return
@@ -32,6 +32,10 @@ func (s *Server) runCase(w http.ResponseWriter, r *http.Request, tid string) {
 	}
 	if (generationMode == "sampling" || generationMode == "platform_llm") && caseStatus != "approved" {
 		fail(w, http.StatusConflict, "模型生成的用例须人工定稿后运行")
+		return
+	}
+	if caseType == "functional" || caseType == "security" {
+		fail(w, http.StatusConflict, "该用例需要人工核验")
 		return
 	}
 	var body struct {
@@ -71,10 +75,19 @@ func (s *Server) runCase(w http.ResponseWriter, r *http.Request, tid string) {
 }
 
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request, tid string) {
-	rows, _ := s.st.DB.Query(`SELECT r.*, c.name AS case_name, c.type AS case_type
-		FROM runs r JOIN cases c ON c.id = r.case_id
-		WHERE r.tenant_id = ? ORDER BY r.started_at DESC LIMIT 100`, tid)
-	out, _ := rowsToMaps(rows)
+	projectID := r.URL.Query().Get("project_id")
+	rows, err := s.st.DB.QueryContext(r.Context(), `SELECT r.*, c.name AS case_name, c.type AS case_type, c.project_id
+		FROM runs r JOIN cases c ON c.id = r.case_id AND c.tenant_id = r.tenant_id
+		WHERE r.tenant_id = ? AND (? = '' OR c.project_id = ?) ORDER BY r.started_at DESC LIMIT 100`, tid, projectID, projectID)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "读取执行列表失败")
+		return
+	}
+	out, err := rowsToMaps(rows)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "读取执行列表失败")
+		return
+	}
 	write(w, http.StatusOK, out)
 }
 

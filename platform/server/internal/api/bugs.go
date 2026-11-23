@@ -3,6 +3,8 @@ package api
 import (
 	"database/sql"
 	"net/http"
+	"slices"
+	"strings"
 )
 
 var bugTransitions = map[string][]string{
@@ -16,31 +18,47 @@ var bugTransitions = map[string][]string{
 }
 
 func (s *Server) listBugs(w http.ResponseWriter, r *http.Request, tid string) {
-	q := "SELECT * FROM bugs WHERE tenant_id = ?"
+	query := "SELECT * FROM bugs WHERE tenant_id = ?"
 	args := []any{tid}
-	if st := r.URL.Query().Get("status"); st != "" {
-		q += " AND status = ?"
-		args = append(args, st)
+	filters := r.URL.Query()
+	for _, field := range []string{"project_id", "status", "severity"} {
+		if value := filters.Get(field); value != "" {
+			query += " AND " + field + " = ?"
+			args = append(args, value)
+		}
 	}
-	if sv := r.URL.Query().Get("severity"); sv != "" {
-		q += " AND severity = ?"
-		args = append(args, sv)
+	if term := strings.TrimSpace(filters.Get("q")); term != "" {
+		query += " AND (instr(lower(title), lower(?)) > 0 OR instr(lower(bug_code), lower(?)) > 0)"
+		args = append(args, term, term)
 	}
-	rows, _ := s.st.DB.Query(q+" ORDER BY created_at DESC", args...)
-	out, _ := rowsToMaps(rows)
+	rows, err := s.st.DB.QueryContext(r.Context(), query+" ORDER BY created_at DESC, rowid DESC", args...)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法加载缺陷列表")
+		return
+	}
+	out, err := rowsToMaps(rows)
+	if err != nil || rows.Err() != nil {
+		fail(w, http.StatusInternalServerError, "无法加载缺陷列表")
+		return
+	}
 	write(w, http.StatusOK, out)
 }
 
 func (s *Server) createBug(w http.ResponseWriter, r *http.Request, tid string) {
 	var b struct {
-		ProjectID string `json:"project_id"`
-		Title     string `json:"title"`
-		Severity  string `json:"severity"`
-		Priority  string `json:"priority"`
-		Signature string `json:"signature"`
-		Evidence  string `json:"evidence"`
+		ProjectID           string `json:"project_id"`
+		Title               string `json:"title"`
+		Severity            string `json:"severity"`
+		Priority            string `json:"priority"`
+		Signature           string `json:"signature"`
+		Evidence            string `json:"evidence"`
+		ReproSteps          string `json:"repro_steps"`
+		ExpectedResult      string `json:"expected_result"`
+		ActualResult        string `json:"actual_result"`
+		Assignee            string `json:"assignee"`
+		DiscoveredVersionID string `json:"discovered_version_id"`
 	}
-	if err := decode(r, &b); err != nil || b.ProjectID == "" || b.Title == "" {
+	if err := decode(r, &b); err != nil || b.ProjectID == "" || strings.TrimSpace(b.Title) == "" {
 		fail(w, http.StatusBadRequest, "project_id 与 title 必填")
 		return
 	}
@@ -50,81 +68,108 @@ func (s *Server) createBug(w http.ResponseWriter, r *http.Request, tid string) {
 	if b.Priority == "" {
 		b.Priority = "P2"
 	}
-	var seq int
-	_ = s.st.DB.QueryRow("SELECT COALESCE(max(rowid),0)+1 FROM bugs WHERE tenant_id = ?", tid).Scan(&seq)
-	bid := id()
-	code := "BUG-" + short(tid) + "-" + itoa(seq)
-	result, err := s.st.DB.Exec(`INSERT INTO bugs
-		(id, tenant_id, project_id, bug_code, title, severity, priority, signature, evidence)
-		SELECT ?, tenant_id, id, ?, ?, ?, ?, ?, ? FROM projects WHERE id = ? AND tenant_id = ?`,
-		bid, code, b.Title, b.Severity, b.Priority, b.Signature, b.Evidence, b.ProjectID, tid)
-	if err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+	if !validBugSeverity(b.Severity) {
+		fail(w, http.StatusBadRequest, "缺陷级别须为 S1 至 S4")
 		return
 	}
-	if count, _ := result.RowsAffected(); count == 0 {
+	if !s.checkBugVersion(w, r, tid, b.ProjectID, b.DiscoveredVersionID) {
+		return
+	}
+	ctx := r.Context()
+	tx, err := s.st.DB.BeginTx(ctx, nil)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法创建缺陷")
+		return
+	}
+	defer tx.Rollback()
+	bid := id()
+	var code string
+	err = tx.QueryRowContext(ctx, `INSERT INTO bugs
+		(id, tenant_id, project_id, bug_code, title, severity, priority, signature, evidence,
+		 repro_steps, expected_result, actual_result, assignee, discovered_version_id)
+		SELECT ?, tenant_id, id, ? || (SELECT COALESCE(max(rowid), 0) + 1 FROM bugs WHERE tenant_id = ?),
+		 ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM projects WHERE id = ? AND tenant_id = ? RETURNING bug_code`,
+		bid, "BUG-"+short(tid)+"-", tid, strings.TrimSpace(b.Title), b.Severity, b.Priority, b.Signature, b.Evidence,
+		b.ReproSteps, b.ExpectedResult, b.ActualResult, strings.TrimSpace(b.Assignee), b.DiscoveredVersionID, b.ProjectID, tid).Scan(&code)
+	if err == sql.ErrNoRows {
 		fail(w, http.StatusNotFound, "项目不存在")
 		return
 	}
-	s.captureEvent(tid, bid, "", "new", "user", "手工创建")
+	if err != nil || saveBugEvent(ctx, tx, tid, bid, "", "new", bugActor(r, ""), "手工创建") != nil || tx.Commit() != nil {
+		fail(w, http.StatusInternalServerError, "无法创建缺陷")
+		return
+	}
 	write(w, http.StatusOK, map[string]string{"id": bid, "bug_code": code})
 }
 
 func (s *Server) transitionBug(w http.ResponseWriter, r *http.Request, tid string) {
 	var b struct {
-		To       string `json:"to"`
-		Actor    string `json:"actor"`
-		Note     string `json:"note"`
-		Severity string `json:"severity"`
+		To             string  `json:"to"`
+		Actor          string  `json:"actor"`
+		Note           string  `json:"note"`
+		Severity       string  `json:"severity"`
+		FixedVersionID *string `json:"fixed_version_id"`
 	}
 	if err := decode(r, &b); err != nil || b.To == "" {
 		fail(w, http.StatusBadRequest, "to 必填")
 		return
 	}
 	bid := r.PathValue("id")
-	var cur string
-	err := s.st.DB.QueryRow("SELECT status FROM bugs WHERE id = ? AND tenant_id = ?", bid, tid).Scan(&cur)
+	ctx := r.Context()
+	var cur, projectID string
+	err := s.st.DB.QueryRowContext(ctx, "SELECT status, project_id FROM bugs WHERE id = ? AND tenant_id = ?", bid, tid).Scan(&cur, &projectID)
 	if err == sql.ErrNoRows {
 		fail(w, http.StatusNotFound, "缺陷不存在")
 		return
 	}
-	if b.Severity != "" && b.Severity != "S1" && b.Severity != "S2" && b.Severity != "S3" && b.Severity != "S4" {
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法加载缺陷")
+		return
+	}
+	if b.Severity != "" && !validBugSeverity(b.Severity) {
 		fail(w, http.StatusBadRequest, "缺陷级别须为 S1 至 S4")
 		return
 	}
-	if actor := authenticatedActor(r); actor != "" {
-		b.Actor = actor
-	}
-	if cur == b.To && b.Severity != "" {
-		if _, err := s.st.DB.Exec("UPDATE bugs SET severity = ?, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?", b.Severity, bid, tid); err != nil {
-			fail(w, http.StatusInternalServerError, "无法更新缺陷级别")
-			return
-		}
-		s.audit(tid, b.Actor, "web", "bug.severity", bid)
-		write(w, http.StatusOK, map[string]string{"id": bid, "status": cur})
-		return
-	}
-	allowed := false
-	for _, next := range bugTransitions[cur] {
-		if next == b.To {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
+	severityOnly := cur == b.To && b.Severity != "" && b.FixedVersionID == nil
+	if !severityOnly && !slices.Contains(bugTransitions[cur], b.To) {
 		fail(w, http.StatusConflict, "不允许从 "+cur+" 转到 "+b.To)
 		return
 	}
-	_, err = s.st.DB.Exec(`UPDATE bugs SET status = ?, reopen_count = CASE WHEN ? = 'reopened' THEN reopen_count + 1 ELSE reopen_count END,
-		severity = COALESCE(NULLIF(?, ''), severity), updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`,
-		b.To, b.To, b.Severity, bid, tid)
+	if b.FixedVersionID != nil {
+		if b.To != "fixed" {
+			fail(w, http.StatusBadRequest, "仅在标记已修复时可设置修复版本")
+			return
+		}
+		if !s.checkBugVersion(w, r, tid, projectID, *b.FixedVersionID) {
+			return
+		}
+	}
+	tx, err := s.st.DB.BeginTx(ctx, nil)
 	if err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		fail(w, http.StatusInternalServerError, "无法更新缺陷")
 		return
 	}
-	s.captureEvent(tid, bid, cur, b.To, b.Actor, b.Note)
-	s.audit(tid, b.Actor, "web", "bug."+b.To, bid)
-	write(w, http.StatusOK, map[string]string{"id": bid, "status": b.To})
+	defer tx.Rollback()
+	var updated string
+	err = tx.QueryRowContext(ctx, `UPDATE bugs SET status = ?, reopen_count = reopen_count + ?,
+		severity = COALESCE(NULLIF(?, ''), severity), fixed_version_id = COALESCE(?, fixed_version_id),
+		updated_at = datetime('now') WHERE id = ? AND tenant_id = ? AND status = ? RETURNING status`,
+		b.To, boolInt(cur != b.To && b.To == "reopened"), b.Severity, b.FixedVersionID, bid, tid, cur).Scan(&updated)
+	if err == sql.ErrNoRows {
+		fail(w, http.StatusConflict, "缺陷状态已变化，请刷新后重试")
+		return
+	}
+	actor := bugActor(r, b.Actor)
+	action := b.To
+	if severityOnly {
+		action = "severity"
+	}
+	if err != nil || (!severityOnly && saveBugEvent(ctx, tx, tid, bid, cur, b.To, actor, b.Note) != nil) || tx.Commit() != nil {
+		fail(w, http.StatusInternalServerError, "无法更新缺陷")
+		return
+	}
+	s.audit(tid, actor, "web", "bug."+action, bid)
+	write(w, http.StatusOK, map[string]string{"id": bid, "status": updated})
 }
 
 func (s *Server) retestBug(w http.ResponseWriter, r *http.Request, tid string) {

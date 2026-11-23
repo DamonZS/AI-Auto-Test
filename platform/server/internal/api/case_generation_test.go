@@ -66,7 +66,7 @@ func TestCaseGenerationSavesVersionedDraftsAndRequiresApproval(t *testing.T) {
 	authRequest(t, handler, "POST", runPath, "tenant-a", editor, `{}`, http.StatusConflict)
 	authRequest(t, handler, "POST", "/api/cases/"+caseID+"/review", "tenant-a", editor, `{"decision":"submit_review"}`, http.StatusOK)
 	authRequest(t, handler, "POST", runPath, "tenant-a", editor, `{}`, http.StatusConflict)
-	authRequest(t, handler, "POST", "/api/cases/"+caseID+"/review", "tenant-a", editor, `{"decision":"approve","reviewer":"tester"}`, http.StatusOK)
+	authRequest(t, handler, "POST", "/api/cases/"+caseID+"/review", "tenant-a", editor, `{"decision":"approve"}`, http.StatusOK)
 	authRequest(t, handler, "POST", runPath, "tenant-a", editor, `{}`, http.StatusOK)
 }
 

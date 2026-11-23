@@ -120,7 +120,22 @@ func TestTrendsCalendarMonthComparisons(t *testing.T) {
 		"completed_runs": 1.5, "pass_rate": -0.5, "new_defects": float64(1),
 	})
 
-	if err := json.Unmarshal(read("empty")["comparison"], &emptyResult); err != nil {
+	empty := read("empty")
+	var emptyDays []map[string]json.RawMessage
+	if err := json.Unmarshal(empty["days"], &emptyDays); err != nil {
+		t.Fatal(err)
+	}
+	if len(emptyDays) != 30 {
+		t.Fatalf("empty tenant days = %d, want 30", len(emptyDays))
+	}
+	for _, day := range emptyDays {
+		for _, key := range []string{"total", "passed", "failed", "needs_review", "error", "self_healed", "new_bugs"} {
+			if string(day[key]) != "0" {
+				t.Errorf("empty tenant day %s: %s = %s, want 0", day["day"], key, day[key])
+			}
+		}
+	}
+	if err := json.Unmarshal(empty["comparison"], &emptyResult); err != nil {
 		t.Fatal(err)
 	}
 	assertFields("empty.current", emptyResult.Current, map[string]any{
@@ -154,6 +169,57 @@ func TestTrendsUTCMonthBoundaries(t *testing.T) {
 			if period.Start != fixture.starts[index] || period.End != fixture.ends[index] {
 				t.Errorf("%s period %d = [%s, %s), want [%s, %s)", fixture.instant, index, period.Start, period.End, fixture.starts[index], fixture.ends[index])
 			}
+		}
+	}
+}
+
+func TestTrendsDailyChart(t *testing.T) {
+	database := openTestStore(t)
+	if _, err := database.DB.Exec(`INSERT INTO runs (id, tenant_id, case_id, status, passed, needs_review, self_healed, started_at, ended_at) VALUES
+		('pass', 'tenant-a', 'case-a', 'passed', 1, 0, 1, '2024-01-31 23:58:00', '2024-02-01 00:00:00'),
+		('fail', 'tenant-a', 'case-a', 'failed', 0, 0, 0, '2024-02-01 00:00:00', '2024-02-01 00:01:00'),
+		('flagged', 'tenant-a', 'case-a', 'failed', 0, 1, 1, '2024-02-01 00:00:00', '2024-02-01 00:02:00'),
+		('review', 'tenant-a', 'case-a', 'needs_review', 0, 0, 0, '2024-02-01 00:00:00', '2024-02-01 00:03:00'),
+		('error', 'tenant-a', 'case-a', 'error', NULL, 0, 0, '2024-02-01 00:00:00', '2024-02-01 00:04:00'),
+		('skip', 'tenant-a', 'case-a', 'skipped', 0, 0, 0, '2024-02-01 00:00:00', '2024-02-01 00:05:00'),
+		('before', 'tenant-a', 'case-a', 'failed', 0, 0, 0, '2024-01-31 23:59:59', '2024-01-31 23:59:59'),
+		('running', 'tenant-a', 'case-a', 'running', NULL, 0, 0, '2024-02-01 00:00:00', NULL),
+		('queued', 'tenant-a', 'case-a', 'queued', NULL, 0, 0, '2024-02-01 00:00:00', NULL),
+		('today', 'tenant-a', 'case-a', 'passed', 1, 0, 0, '2024-02-29 23:59:00', '2024-03-01 00:00:00'),
+		('after', 'tenant-a', 'case-a', 'passed', 1, 0, 0, '2024-03-01 23:59:00', '2024-03-02 00:00:00'),
+		('other-tenant', 'tenant-b', 'case-b', 'passed', 1, 0, 1, '2024-02-01 00:00:00', '2024-02-01 00:01:00')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB.Exec(`INSERT INTO bugs (id, tenant_id, project_id, bug_code, title, created_at, updated_at) VALUES
+		('first', 'tenant-a', 'project-a', 'A-1', 'First', '2024-02-01 00:00:00', '2024-02-01 00:00:00'),
+		('second', 'tenant-a', 'project-a', 'A-2', 'Second', '2024-02-01 00:01:00', '2024-03-01 00:00:00'),
+		('bug-only', 'tenant-a', 'project-a', 'A-3', 'Bug only', '2024-02-29 23:59:59', '2024-03-01 00:00:00'),
+		('before', 'tenant-a', 'project-a', 'A-4', 'Before', '2024-01-31 23:59:59', '2024-02-01 00:00:00'),
+		('after', 'tenant-a', 'project-a', 'A-5', 'After', '2024-03-02 00:00:00', '2024-03-02 00:00:00'),
+		('other-tenant', 'tenant-b', 'project-b', 'B-1', 'Other tenant', '2024-02-01 00:00:00', '2024-02-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2024, time.March, 2, 0, 15, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	days, err := New(database).loadTrendDays(t.Context(), "tenant-a", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(days) != 30 {
+		t.Fatalf("days = %d, want 30", len(days))
+	}
+	wantByDay := map[string]trendDay{
+		"2024-02-01": {Total: 6, Passed: 1, Failed: 1, NeedsReview: 2, Error: 1, SelfHealed: 2, NewBugs: 2},
+		"2024-02-29": {NewBugs: 1},
+		"2024-03-01": {Total: 1, Passed: 1},
+	}
+	date := time.Date(2024, time.February, 1, 0, 0, 0, 0, time.UTC)
+	for index, got := range days {
+		label := date.AddDate(0, 0, index).Format(time.DateOnly)
+		want := wantByDay[label]
+		want.Day = label
+		if got != want {
+			t.Errorf("days[%d] = %+v, want %+v", index, got, want)
 		}
 	}
 }

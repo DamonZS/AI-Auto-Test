@@ -52,10 +52,12 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /api/projects", s.tenant(s.listProjects))
 	mux.HandleFunc("POST /api/projects", s.tenant(s.createProject))
+	s.registerProjectWorkspace(mux)
 
 	mux.HandleFunc("GET /api/requirements", s.tenant(s.listRequirements))
 	mux.HandleFunc("POST /api/requirements", s.tenant(s.createRequirement))
 	s.registerRequirements(mux)
+	s.registerRequirementPoints(mux)
 
 	mux.HandleFunc("GET /api/versions", s.tenant(s.listVersions))
 	mux.HandleFunc("POST /api/versions", s.tenant(s.createVersion))
@@ -77,9 +79,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/suite-runs/{id}", s.tenant(s.suiteRunSummary))
 	mux.HandleFunc("PATCH /api/cases/{id}", s.tenant(s.updateCase))
 	mux.HandleFunc("GET /api/cases/{id}/history", s.tenant(s.listCaseHistory))
-	mux.HandleFunc("POST /api/cases/{id}/review", s.tenant(s.reviewCase))
+	mux.HandleFunc("POST /api/cases/{id}/review", s.tenant(s.reviewCaseWorkflow))
+	mux.HandleFunc("POST /api/cases/{id}/revise-with-ai", s.tenant(s.reviseCaseDraft))
 
 	mux.HandleFunc("GET /api/test-data/datasets", s.tenant(s.listDataSets))
+	mux.HandleFunc("POST /api/test-data/generate", s.tenant(s.generateAIDataSet))
 	mux.HandleFunc("POST /api/test-data/datasets", s.tenant(s.createDataSet))
 	mux.HandleFunc("POST /api/test-data/datasets/{id}/generate", s.tenant(s.generateData))
 	mux.HandleFunc("GET /api/test-data/datasets/{id}/records", s.tenant(s.listDataRecords))
@@ -89,6 +93,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/runs/{id}", s.tenant(s.getRun))
 	mux.HandleFunc("GET /api/runs/{id}/report", s.tenant(s.exportRunReport))
 	mux.HandleFunc("POST /api/cases/{id}/run", s.tenant(s.runCase))
+	mux.HandleFunc("POST /api/cases/{id}/manual-result", s.tenant(s.recordManualResult))
 	mux.HandleFunc("GET /api/cases/{id}/schedule", s.tenant(s.getCaseSchedule))
 	mux.HandleFunc("PUT /api/cases/{id}/schedule", s.tenant(s.putCaseSchedule))
 	mux.HandleFunc("DELETE /api/cases/{id}/schedule", s.tenant(s.deleteCaseSchedule))
@@ -100,6 +105,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/bugs", s.tenant(s.createBug))
 	mux.HandleFunc("POST /api/bugs/{id}/transition", s.tenant(s.transitionBug))
 	mux.HandleFunc("POST /api/bugs/{id}/retest", s.tenant(s.retestBug))
+	s.registerBugManagement(mux)
 
 	mux.HandleFunc("GET /api/patches", s.tenant(s.listPatches))
 	mux.HandleFunc("POST /api/patches/{id}/decide", s.owner(s.decidePatch))

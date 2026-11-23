@@ -1,84 +1,138 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
 import DataTable from '../components/DataTable.vue'
 import CoveragePanel from '../components/CoveragePanel.vue'
+import ReleaseComparison from '../components/ReleaseComparison.vue'
 
+const props = defineProps({ projectId: { type: String, default: '' } })
 const rows = ref([])
 const projects = ref([])
-const projectId = ref('')
-const form = ref({ name: '', commit_ref: '', impact: '' })
+const projectId = ref(props.projectId)
+const form = ref(null)
+const loading = ref(true)
+const saving = ref(false)
 const error = ref('')
+const notice = ref('')
 
-const projectName = computed(() => (id) => projects.value.find((p) => p.id === id)?.name || '—')
+const projectVersions = computed(() => rows.value.filter((row) => row.project_id === projectId.value)
+  .map((row) => ({ ...row, impact: impactTags(row.impact_json) })))
 
 function impactTags(json) {
-  try { return JSON.parse(json || '[]') } catch { return [] }
+  try {
+    const parsed = JSON.parse(json || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
 }
 
 async function load() {
-  projects.value = await api.get('/api/projects')
-  rows.value = await api.get('/api/versions')
-  if (!projectId.value && projects.value.length) projectId.value = projects.value[0].id
+  loading.value = true
+  try {
+    const [projectRows, versionRows] = await Promise.all([api.get('/api/projects'), api.get('/api/versions')])
+    projects.value = projectRows
+    rows.value = versionRows
+    if (!projectId.value) projectId.value = props.projectId || projectRows[0]?.id || ''
+  } catch (failure) {
+    error.value = failure.message
+  } finally {
+    loading.value = false
+  }
+}
+
+function openForm() {
+  form.value = { name: '', commit_ref: '', impact: '' }
+  error.value = ''
+  notice.value = ''
 }
 
 async function add() {
-  if (!form.value.name || !projectId.value) return
+  saving.value = true
   error.value = ''
   try {
     await api.post('/api/versions', {
       project_id: projectId.value,
       name: form.value.name,
       commit_ref: form.value.commit_ref,
-      impact: form.value.impact.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
+      impact: form.value.impact.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean),
     })
-    form.value = { name: '', commit_ref: '', impact: '' }
+    form.value = null
+    notice.value = '版本已登记'
     await load()
-  } catch (e) { error.value = e.message }
+  } catch (failure) {
+    error.value = failure.message
+  } finally {
+    saving.value = false
+  }
 }
 
+watch(() => props.projectId, (id) => { projectId.value = id || projects.value[0]?.id || '' })
+watch(projectId, () => {
+  form.value = null
+  error.value = ''
+  notice.value = ''
+})
 onMounted(load)
 </script>
 
 <template>
-  <header class="head">
-    <div class="form">
-      <select v-model="projectId">
-        <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-      </select>
-      <input v-model="form.name" placeholder="版本名 v1.2.0" class="name" />
-      <input v-model="form.commit_ref" placeholder="commit / tag" class="commit" />
-      <input v-model="form.impact" placeholder="影响范围，逗号分隔" class="impact" />
-      <button class="primary" @click="add">登记</button>
-    </div>
-  </header>
-  <p v-if="error" class="error">{{ error }}</p>
-  <DataTable
-    :rows="rows"
-    :columns="[
-      { key: 'name', label: '版本', width: '18%' },
-      { key: 'commit_ref', label: '提交', width: '18%' },
-      { key: 'impact_json', label: '影响范围' },
-      { key: 'project_id', label: '项目', width: '16%' },
-      { key: 'created_at', label: '创建时间', width: '18%' },
-    ]"
-    empty="还没有版本"
-  >
-    <template #project_id="{ row }">{{ projectName(row.project_id) }}</template>
-    <template #impact_json="{ row }">
-      <span v-for="t in impactTags(row.impact_json)" :key="t" class="chip">{{ t }}</span>
+  <div class="hub">
+    <header class="hub-toolbar">
+      <label v-if="!props.projectId" class="hub-field hub-grow" for="versions-project">项目
+        <select id="versions-project" v-model="projectId" name="project_id" :disabled="loading || saving">
+          <option v-if="!projects.length" value="">暂无项目</option>
+          <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
+        </select>
+      </label>
+      <button type="button" class="primary" :disabled="loading || saving || !projects.some((project) => project.id === projectId)" @click="openForm">登记版本</button>
+    </header>
+    <form v-if="form" class="hub-panel hub-form" action="/api/versions" method="post" aria-labelledby="version-form-title" @submit.prevent="add">
+      <h3 id="version-form-title">登记版本</h3>
+      <div class="hub-fields">
+        <label class="hub-field" for="version-name">版本名称 *
+          <input id="version-name" v-model.trim="form.name" name="name" placeholder="v1.2.0" required />
+        </label>
+        <label class="hub-field" for="version-ref">提交引用
+          <input id="version-ref" v-model.trim="form.commit_ref" name="commit_ref" placeholder="提交、分支或标签" />
+        </label>
+        <label class="hub-field" for="version-impact">影响范围（逗号分隔）
+          <input id="version-impact" v-model.trim="form.impact" name="impact" />
+        </label>
+      </div>
+      <div class="hub-actions">
+        <button type="submit" class="primary" :disabled="saving">{{ saving ? '保存中…' : '保存版本' }}</button>
+        <button type="button" :disabled="saving" @click="form = null">取消</button>
+      </div>
+    </form>
+    <p v-if="error" class="hub-error" role="alert">{{ error }}</p>
+    <p v-if="notice" class="hub-notice" role="status">{{ notice }}</p>
+    <p v-if="loading" role="status">正在读取版本…</p>
+    <template v-else>
+      <DataTable
+        :rows="projectVersions"
+        :columns="[
+          { key: 'name', label: '版本' },
+          { key: 'commit_ref', label: '提交引用' },
+          { key: 'impact', label: '影响范围' },
+          { key: 'created_at', label: '登记时间' },
+        ]"
+        empty="项目还没有版本"
+      >
+        <template #commit_ref="{ row }"><code class="version-ref">{{ row.commit_ref || '—' }}</code></template>
+        <template #impact="{ row }">
+          <span v-if="!row.impact.length">—</span>
+          <span v-for="(tag, index) in row.impact" :key="index" class="chip">{{ tag }}</span>
+        </template>
+      </DataTable>
     </template>
-  </DataTable>
-  <CoveragePanel :versions="rows.filter((row) => row.project_id === projectId)" />
+    <ReleaseComparison :key="projectId" :versions="projectVersions" />
+    <CoveragePanel :versions="projectVersions" />
+  </div>
 </template>
 
+<style scoped src="./project-hubs.css"></style>
 <style scoped>
-.head { margin-bottom: 16px; }
-.form { display: flex; gap: 8px; }
-select, input { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
-.name { width: 150px; }
-.commit { width: 170px; }
-.impact { flex: 1; }
-.chip { display: inline-block; background: #f1f1f4; border-radius: 4px; padding: 1px 6px; margin-right: 4px; font-size: 12px; color: var(--muted); }
-.error { color: var(--bad); }
+.version-ref { overflow-wrap: anywhere; }
+.chip { display: inline-block; background: var(--bg); border-radius: 4px; padding: 1px 6px; margin-right: 4px; font-size: 12px; color: var(--muted); }
 </style>

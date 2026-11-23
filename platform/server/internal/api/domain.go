@@ -127,6 +127,10 @@ func (s *Server) createCase(w http.ResponseWriter, r *http.Request, tid string) 
 	if b.Type == "" {
 		b.Type = "ui"
 	}
+	if err := validateCaseDraftScenario(b.Type, b.Scenario); err != nil {
+		fail(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	if b.ExpectedSource == "" {
 		b.ExpectedSource = "requirement"
 	}
@@ -177,9 +181,9 @@ func (s *Server) updateCase(w http.ResponseWriter, r *http.Request, tid string) 
 	}
 
 	cid := r.PathValue("id")
-	var status string
+	var status, kind string
 	var version int
-	err := s.st.DB.QueryRow("SELECT status, version_no FROM cases WHERE id = ? AND tenant_id = ?", cid, tid).Scan(&status, &version)
+	err := s.st.DB.QueryRow("SELECT status, type, version_no FROM cases WHERE id = ? AND tenant_id = ?", cid, tid).Scan(&status, &kind, &version)
 	if err == sql.ErrNoRows {
 		fail(w, http.StatusNotFound, "用例不存在")
 		return
@@ -190,6 +194,10 @@ func (s *Server) updateCase(w http.ResponseWriter, r *http.Request, tid string) 
 	}
 	if status != "draft" {
 		fail(w, http.StatusConflict, "只有草稿用例可以编辑")
+		return
+	}
+	if err := validateCaseDraftScenario(kind, b.Scenario); err != nil {
+		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 
@@ -247,74 +255,4 @@ func (s *Server) listCaseHistory(w http.ResponseWriter, r *http.Request, tid str
 		return
 	}
 	write(w, http.StatusOK, out)
-}
-
-func (s *Server) reviewCase(w http.ResponseWriter, r *http.Request, tid string) {
-	var b struct {
-		Decision string `json:"decision"`
-		Reviewer string `json:"reviewer"`
-		Scenario string `json:"scenario"`
-	}
-	if err := decode(r, &b); err != nil {
-		fail(w, http.StatusBadRequest, "请求体无效")
-		return
-	}
-	cid := r.PathValue("id")
-	var cur string
-	var vno int
-	err := s.st.DB.QueryRow("SELECT status, version_no FROM cases WHERE id = ? AND tenant_id = ?", cid, tid).Scan(&cur, &vno)
-	if err == sql.ErrNoRows {
-		fail(w, http.StatusNotFound, "用例不存在")
-		return
-	}
-	switch b.Decision {
-	case "submit_review":
-		_, err = s.st.DB.Exec("UPDATE cases SET status = 'in_review', updated_at = datetime('now') WHERE id = ? AND tenant_id = ?", cid, tid)
-	case "approve":
-		_, err = s.st.DB.Exec("UPDATE cases SET status = 'approved', reviewer = ?, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?", b.Reviewer, cid, tid)
-	case "reject", "revise":
-		if b.Scenario == "" {
-			fail(w, http.StatusBadRequest, "修订场景不能为空")
-			return
-		}
-		if cur == "in_review" && b.Decision == "reject" {
-			_, err = s.st.DB.Exec("UPDATE cases SET status = 'draft', updated_at = datetime('now') WHERE id = ? AND tenant_id = ?", cid, tid)
-			break
-		}
-		tx, txErr := s.st.DB.Begin()
-		if txErr != nil {
-			fail(w, http.StatusInternalServerError, txErr.Error())
-			return
-		}
-		if _, txErr = tx.Exec(`INSERT INTO case_revisions (tenant_id, case_id, version_no, scenario)
-			SELECT tenant_id, id, version_no, scenario FROM cases WHERE id = ? AND tenant_id = ?
-			ON CONFLICT (tenant_id, case_id, version_no) DO NOTHING`, cid, tid); txErr == nil {
-			_, txErr = tx.Exec("UPDATE cases SET status = 'draft', scenario = ?, version_no = ?, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?", b.Scenario, vno+1, cid, tid)
-		}
-		if txErr == nil {
-			_, txErr = tx.Exec("INSERT INTO case_revisions (tenant_id, case_id, version_no, scenario) VALUES (?, ?, ?, ?)", tid, cid, vno+1, b.Scenario)
-		}
-		if txErr == nil {
-			txErr = tx.Commit()
-		} else {
-			_ = tx.Rollback()
-		}
-		if txErr != nil {
-			fail(w, http.StatusInternalServerError, txErr.Error())
-			return
-		}
-		write(w, http.StatusOK, map[string]string{"id": cid, "decision": b.Decision})
-		return
-	case "deprecate":
-		_, err = s.st.DB.Exec("UPDATE cases SET status = 'deprecated', updated_at = datetime('now') WHERE id = ? AND tenant_id = ?", cid, tid)
-	default:
-		fail(w, http.StatusBadRequest, "decision 取值：submit_review / approve / reject / deprecate")
-		return
-	}
-	if err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.audit(tid, b.Reviewer, "web", "case."+b.Decision, cid)
-	write(w, http.StatusOK, map[string]string{"id": cid, "decision": b.Decision})
 }

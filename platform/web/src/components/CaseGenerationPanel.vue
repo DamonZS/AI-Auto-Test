@@ -7,18 +7,21 @@ const props = defineProps({
   requirements: { type: Array, required: true },
   initialRequirementId: { type: String, default: '' },
   initialVersionId: { type: String, default: '' },
+  initialReviewId: { type: String, default: '' },
 })
 const emit = defineEmits(['generated'])
 const labelId = useId()
 const requirementId = ref('')
 const versionId = ref('')
-const type = ref('ui')
+const type = ref('functional')
 const busy = ref(false)
 const error = ref('')
 const result = ref(null)
 const projectRequirements = computed(() => props.requirements.filter((item) => item.project_id === props.projectId))
+const reviewId = computed(() => requirementId.value === props.initialRequirementId ? props.initialReviewId : '')
+const types = { functional: '手工功能', ui: 'UI', api: '接口', perf: '性能', security: '防御性安全审查' }
 
-watch(() => [props.projectId, props.initialRequirementId, props.initialVersionId], () => {
+watch(() => [props.projectId, props.initialRequirementId, props.initialVersionId, props.initialReviewId], () => {
   requirementId.value = props.initialRequirementId
   versionId.value = props.initialRequirementId ? props.initialVersionId : ''
   error.value = ''
@@ -41,6 +44,7 @@ async function generate() {
       requirement_id: requirementId.value,
       type: type.value,
       ...(versionId.value && { version_id: versionId.value }),
+      ...(reviewId.value && { review_id: reviewId.value }),
     })
     emit('generated', result.value)
   } catch (problem) {
@@ -63,10 +67,10 @@ async function generate() {
           {{ item.code ? `${item.code} · ${item.title}` : item.title }}
         </option>
       </select>
+      <p v-if="reviewId" class="source">使用已批准的功能点</p>
       <fieldset class="generation-types">
         <legend>类型</legend>
-        <label><input v-model="type" type="radio" name="type" value="ui" /> UI</label>
-        <label><input v-model="type" type="radio" name="type" value="api" /> 接口</label>
+        <label v-for="(label, value) in types" :key="value"><input v-model="type" type="radio" name="type" :value="value" /> {{ label }}</label>
       </fieldset>
       <label v-if="initialVersionId && requirementId === initialRequirementId">
         <input type="checkbox" :checked="!!versionId" @change="versionId = $event.target.checked ? initialVersionId : ''" />
@@ -75,7 +79,7 @@ async function generate() {
       <div><button type="submit" class="primary">{{ busy ? '正在生成…' : '生成草稿' }}</button></div>
     </fieldset>
     <p v-if="error" class="generation-error" role="alert">{{ error }}</p>
-    <p v-if="result" role="status">已从需求修订 {{ result.revision_no }} 生成 {{ result.cases.length }} 条草稿，审批后可运行。</p>
+    <p v-if="result" role="status">已从需求修订 {{ result.revision_no }} 保存 {{ result.cases.length }} 条草稿。核对内容后提交审核。</p>
   </form>
 </template>
 
@@ -84,8 +88,9 @@ async function generate() {
 .generation-panel h3, .generation-panel p { margin: 0; }
 .generation-fields, .generation-types { padding: 0; border: 0; margin: 0; min-width: 0; }
 .generation-fields { display: grid; gap: 6px; }
-.generation-types { display: flex; gap: 12px; margin-block: 4px; }
+.generation-types { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-block: 4px; }
 .generation-types legend { padding: 0; }
+.source { color: var(--muted); font-size: 12px; }
 .generation-panel select { font: inherit; color: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 .generation-error { color: var(--bad); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

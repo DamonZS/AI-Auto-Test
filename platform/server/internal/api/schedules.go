@@ -68,16 +68,16 @@ func (s *Server) putCaseSchedule(w http.ResponseWriter, r *http.Request, tid str
 		return
 	}
 	cid := r.PathValue("id")
-	var status string
-	if err := s.st.DB.QueryRow("SELECT status FROM cases WHERE id = ? AND tenant_id = ?", cid, tid).Scan(&status); err == sql.ErrNoRows {
+	var status, caseType string
+	if err := s.st.DB.QueryRow("SELECT status, type FROM cases WHERE id = ? AND tenant_id = ?", cid, tid).Scan(&status, &caseType); err == sql.ErrNoRows {
 		fail(w, http.StatusNotFound, "用例不存在")
 		return
 	} else if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if status != "approved" {
-		fail(w, http.StatusConflict, "仅已定稿用例可设置计划")
+	if status != "approved" || caseType == "functional" || caseType == "security" {
+		fail(w, http.StatusConflict, "仅已定稿的自动化用例可设置计划")
 		return
 	}
 	enabled := 0
@@ -196,7 +196,7 @@ func (s *Server) fireDueSchedules(now time.Time) []string {
 func (s *Server) fireDueCaseSchedules(now time.Time) []string {
 	rows, err := s.st.DB.Query(`SELECT cs.case_id, cs.tenant_id, cs.weekday, cs.hour, cs.minute, cs.last_run_key,
 		c.version_no, c.dataset_id, c.data_row_id FROM case_schedules cs JOIN cases c ON c.id = cs.case_id
-		WHERE cs.enabled = 1 AND c.status = 'approved'`)
+		WHERE cs.enabled = 1 AND c.status = 'approved' AND c.type NOT IN ('functional', 'security')`)
 	if err != nil {
 		return nil
 	}

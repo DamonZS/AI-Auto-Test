@@ -4,10 +4,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 func (s *Server) listSuites(w http.ResponseWriter, r *http.Request, tid string) {
-	rows, err := s.st.DB.Query("SELECT id, tenant_id, name, created_at, case_ids, max_concurrency FROM suites WHERE tenant_id = ? ORDER BY created_at DESC, id", tid)
+	projectID := r.URL.Query().Get("project_id")
+	rows, err := s.st.DB.QueryContext(r.Context(), `SELECT id, tenant_id, name, created_at, case_ids, max_concurrency, project_id FROM suites
+		WHERE tenant_id = ? AND (? = '' OR project_id = ?) ORDER BY created_at DESC, id`, tid, projectID, projectID)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -25,18 +28,26 @@ func (s *Server) listSuites(w http.ResponseWriter, r *http.Request, tid string) 
 
 func (s *Server) createSuite(w http.ResponseWriter, r *http.Request, tid string) {
 	var body struct {
-		Name string `json:"name"`
+		Name      string `json:"name"`
+		ProjectID string `json:"project_id"`
 	}
-	if err := decode(r, &body); err != nil || body.Name == "" {
+	if err := decode(r, &body); err != nil || strings.TrimSpace(body.Name) == "" {
 		fail(w, http.StatusBadRequest, "name 必填")
 		return
 	}
 	suiteID := id()
-	if _, err := s.st.DB.Exec("INSERT INTO suites (id, tenant_id, name) VALUES (?, ?, ?)", suiteID, tid, body.Name); err != nil {
+	result, err := s.st.DB.ExecContext(r.Context(), `INSERT INTO suites (id, tenant_id, name, project_id)
+		SELECT ?, ?, ?, ? WHERE ? = '' OR EXISTS (SELECT 1 FROM projects WHERE id = ? AND tenant_id = ?)`,
+		suiteID, tid, strings.TrimSpace(body.Name), body.ProjectID, body.ProjectID, body.ProjectID, tid)
+	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	write(w, http.StatusOK, map[string]any{"id": suiteID, "name": body.Name, "case_ids": []string{}, "max_concurrency": 1})
+	if count, _ := result.RowsAffected(); count == 0 {
+		fail(w, http.StatusNotFound, "项目不存在")
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"id": suiteID, "name": strings.TrimSpace(body.Name), "project_id": body.ProjectID, "case_ids": []string{}, "max_concurrency": 1})
 }
 
 func (s *Server) updateSuiteConcurrency(w http.ResponseWriter, r *http.Request, tid string) {
@@ -63,8 +74,8 @@ func (s *Server) updateSuiteConcurrency(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) runSuite(w http.ResponseWriter, r *http.Request, tid string) {
 	suiteID := r.PathValue("id")
-	var exists int
-	if err := s.st.DB.QueryRow("SELECT 1 FROM suites WHERE id = ? AND tenant_id = ?", suiteID, tid).Scan(&exists); err == sql.ErrNoRows {
+	var projectID string
+	if err := s.st.DB.QueryRow("SELECT project_id FROM suites WHERE id = ? AND tenant_id = ?", suiteID, tid).Scan(&projectID); err == sql.ErrNoRows {
 		fail(w, http.StatusNotFound, "套件不存在")
 		return
 	} else if err != nil {
@@ -89,8 +100,8 @@ func (s *Server) runSuite(w http.ResponseWriter, r *http.Request, tid string) {
 		return
 	}
 	for _, caseID := range body.CaseIDs {
-		var status string
-		if err = tx.QueryRow("SELECT status FROM cases WHERE id = ? AND tenant_id = ?", caseID, tid).Scan(&status); err != nil {
+		var status, caseType string
+		if err = tx.QueryRow("SELECT status, type FROM cases WHERE id = ? AND tenant_id = ? AND (? = '' OR project_id = ?)", caseID, tid, projectID, projectID).Scan(&status, &caseType); err != nil {
 			if err == sql.ErrNoRows {
 				fail(w, http.StatusNotFound, "用例不存在")
 			} else {
@@ -98,8 +109,8 @@ func (s *Server) runSuite(w http.ResponseWriter, r *http.Request, tid string) {
 			}
 			return
 		}
-		if status != "approved" {
-			fail(w, http.StatusConflict, "仅已定稿用例可加入批次")
+		if status != "approved" || caseType == "functional" || caseType == "security" {
+			fail(w, http.StatusConflict, "只有已定稿的自动化用例可以加入执行批次")
 			return
 		}
 	}
@@ -126,7 +137,7 @@ func enqueueSuiteMembers(tx *sql.Tx, tid, runID string, caseIDs []string) error 
 	for _, caseID := range caseIDs {
 		result, err := tx.Exec(`INSERT INTO runs (id, tenant_id, case_id, suite_run_id, dataset_id, data_row_id)
 			SELECT ?, tenant_id, id, ?, dataset_id, data_row_id FROM cases
-			WHERE tenant_id = ? AND id = ? AND status = 'approved'`, id(), runID, tid, caseID)
+			WHERE tenant_id = ? AND id = ? AND status = 'approved' AND type NOT IN ('functional', 'security')`, id(), runID, tid, caseID)
 		if err != nil {
 			return err
 		}
