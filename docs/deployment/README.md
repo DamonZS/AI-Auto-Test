@@ -45,7 +45,7 @@ py -3.13 packaging/build_desktop.py --output artifacts --iscc 'C:\path\to\ISCC.e
 
 运行 `Auto-Test-windows-x64-setup.exe` 后，从开始菜单打开 `Auto-Test`。在桌面窗口输入工作区名称、用户名和密码，创建本机首个工作区。注册成功会自动进入工作台。已初始化的数据库直接显示登录页。
 
-关闭窗口会收起到通知区域。点击托盘图标恢复窗口，使用托盘菜单的「退出 Auto-Test」停止本机服务和 worker。开始菜单中的 `Stop Auto-Test` 会显示停止结果。卸载保留 `%LOCALAPPDATA%\Auto-Test` 下的用户数据。
+关闭窗口会收起到通知区域。点击托盘图标恢复窗口，使用托盘菜单的「退出 Auto-Test」停止本机服务和 worker。开始菜单中的「停止 Auto-Test」会显示停止结果。简体中文安装程序检测到旧版正在运行时会提供「关闭后继续」和「取消安装」。关闭应用会中断正在执行的测试。覆盖安装和卸载保留 `%LOCALAPPDATA%\Auto-Test` 下的用户数据。
 
 在工作台签发 worker 令牌后，可将其放在 `%LOCALAPPDATA%\Auto-Test\worker-token.txt` 单行文件。仅当前用户应有读写权限。桌面检测到文件后启动 worker。轮换时退出桌面、替换令牌、重新启动，再撤销旧令牌。
 
