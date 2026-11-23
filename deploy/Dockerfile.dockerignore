@@ -1,4 +1,6 @@
 **
+!LICENSE
+!COPYRIGHT.md
 !deploy/worker-requirements.txt
 !platform/web/package.json
 !platform/web/package-lock.json
