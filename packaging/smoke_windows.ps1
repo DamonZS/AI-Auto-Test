@@ -35,7 +35,8 @@ try {
     $launcher = Join-Path $install 'desktop.py'
     $options = "`"$launcher`" --data-dir `"$data`" --port $port"
     if (-not $NativeWindow) { $options += ' --no-browser' }
-    $desktop = Start-Process -FilePath $runtime -ArgumentList $options -Environment @{ PLATFORM_WORKER_TOKEN = ''; PLATFORM_AUTH_PASSWORD = ''; PLATFORM_AUTH_USERNAME = '' } -WindowStyle Hidden -PassThru
+    $launchStyle = if ($NativeWindow) { 'Normal' } else { 'Hidden' }
+    $desktop = Start-Process -FilePath $runtime -ArgumentList $options -Environment @{ PLATFORM_WORKER_TOKEN = ''; PLATFORM_AUTH_PASSWORD = ''; PLATFORM_AUTH_USERNAME = '' } -WindowStyle $launchStyle -PassThru
     $smoke = Join-Path $PSScriptRoot '../deploy/smoke.py'
     $fixture = & (Join-Path $install 'python/python.exe') $smoke $server prepare --desktop-payload $install --worker-token-file (Join-Path $data 'worker-token.txt') | ConvertFrom-Json
     python $smoke $server check $fixture.tenant $fixture.run
