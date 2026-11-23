@@ -8,6 +8,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMenu, QSystemTrayIcon
 
 from desktop_recorder import RecorderDialog
+from desktop_workbook import install_case_workbook_bridge
 
 
 class WorkbenchPage(QWebEnginePage):
@@ -33,6 +34,7 @@ class DesktopWindow(QMainWindow):
 
         browser = QWebEngineView(self)
         browser.setPage(WorkbenchPage(url, browser))
+        install_case_workbook_bridge(browser.page(), self)
         browser.page().profile().downloadRequested.connect(self.save_download)
         self.setCentralWidget(browser)
         browser.setUrl(url)

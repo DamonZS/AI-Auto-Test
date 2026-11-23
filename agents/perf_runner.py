@@ -154,6 +154,7 @@ async def execute_perf_task(task: dict, settings: dict | None = None) -> dict:
         "status": "passed" if completed and failures == 0 else "failed",
         "passed": completed > 0 and failures == 0,
         "needs_review": False,
+        "duration_ms": round(elapsed_seconds * 1000),
         "requests": completed,
         "failures": failures,
         "error_rate": round(error_rate, 4),

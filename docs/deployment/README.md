@@ -47,19 +47,27 @@ py -3.13 packaging/build_desktop.py --output artifacts --iscc 'C:\path\to\ISCC.e
 
 关闭窗口会收起到通知区域。点击托盘图标恢复窗口，使用托盘菜单的「退出 Auto-Test」停止本机服务和 worker。开始菜单中的「停止 Auto-Test」会显示停止结果。简体中文安装程序检测到旧版正在运行时会提供「关闭后继续」和「取消安装」。关闭应用会中断正在执行的测试。覆盖安装和卸载保留 `%LOCALAPPDATA%\Auto-Test` 下的用户数据。
 
-在工作台签发 worker 令牌后，可将其放在 `%LOCALAPPDATA%\Auto-Test\worker-token.txt` 单行文件。仅当前用户应有读写权限。桌面检测到文件后启动 worker。轮换时退出桌面、替换令牌、重新启动，再撤销旧令牌。
+以工作区 owner 登录后，打开「设置 → 桌面 Worker」，点击「激活 Worker」。应用会为当前工作区配置凭据，并在当前桌面会话中启动本机 worker。
 
 ## macOS arm64
 
 在 Apple Silicon 和同版本构建工具上运行 `python3.13 packaging/build_desktop.py --output artifacts`。打开 `Auto-Test-macos-arm64.dmg`，把 `Auto-Test.app` 拖到 `Applications`。安装包当前用于内部验收。外发前需要签名与公证。
 
-从 `Applications` 打开 `Auto-Test`，在桌面窗口创建工作区并注册管理员。应用图标出现在 Dock，菜单栏提供恢复窗口和退出入口。签发的 worker 令牌可写入 `~/Library/Application Support/Auto-Test/worker-token.txt`，文件权限设为 `600`。在启动器进程环境中也可直接提供 `PLATFORM_WORKER_TOKEN`。
+从 `Applications` 打开 `Auto-Test`，在桌面窗口创建工作区并注册管理员。应用图标出现在 Dock，菜单栏提供恢复窗口和退出入口。以工作区 owner 打开「设置 → 桌面 Worker」即可激活。
+
+## 桌面 Worker 凭据
+
+桌面启动器依次读取 `PLATFORM_WORKER_TOKEN`、用户数据目录下的手工 `worker-token.txt` 和 GUI 管理的 `desktop-worker-token.txt`，采用第一个非空值。设置 `PLATFORM_WORKER_TOKEN` 时，界面隐藏激活入口。用户数据目录为 Windows 的 `%LOCALAPPDATA%\Auto-Test` 或 macOS 的 `~/Library/Application Support/Auto-Test`。手工令牌文件只应允许当前用户访问，macOS 权限设为 `600`。手动轮换时，退出桌面，替换显式凭据，重新启动后撤销旧令牌。
+
+每个桌面实例运行一个 worker，服务于其令牌所属的工作区。「已激活」表示当前工作区的凭据有效。GUI 凭据到期或被撤销后，重新打开设置即可激活。切换 worker 所属工作区时，先通过现有服务令牌管理接口撤销原工作区的 worker 令牌，再进入新工作区激活。
+
+桌面界面沿用 `POST /api/auth/service-tokens` 签发 worker 令牌，再调用 `POST /api/desktop/worker` 传入 `{"token":"…"}`。`GET /api/desktop/worker` 返回 `{"status":"inactive|active|external|other_workspace"}`，保存成功返回 `{"status":"active"}`。两个操作都要求本机回环访问、当前工作区的 owner 会话和 `X-Tenant-Id`。`POST` 还须提供同源 `Origin`，令牌必须属于当前工作区、范围为 `worker` 且仍有效。响应只包含状态或错误。常规服务端部署不启用此入口。
 
 ## 验证与数据
 
-- Playwright worker 默认使用 Chromium。可设置 `PLATFORM_BROWSER=chrome` 或 `PLATFORM_BROWSER=msedge` 使用执行机上已安装的对应浏览器，也可设置 `firefox` 或 `webkit`，并在同一 Python 环境安装对应的 Playwright 浏览器。使用多个执行进程时为每个进程设置所需浏览器。
+- 租户 Playwright 浏览器选项、Ego 本机冒烟与 Laya/JEV 状态见 [浏览器与增强档](browser-providers.md)。
 
 - Windows 使用 PowerShell 7 执行 `./packaging/smoke_windows.ps1 -Installer artifacts/Auto-Test-windows-x64-setup.exe`。macOS 执行 `bash packaging/smoke_macos.sh artifacts/Auto-Test-macos-arm64.dmg`。Linux 执行 `bash deploy/smoke_compose.sh`。
-- 冒烟使用临时账号、独立数据库和合成结构化 UI 用例，检查桌面注册表单、正式认证、Chromium 实际断言和 worker 回报。真实模型凭据只在运行时设置。
+- 冒烟使用临时账号、独立数据库和合成结构化 UI 用例，检查桌面注册表单、设置页 Worker 激活、正式认证、Chromium 实际断言和 worker 回报。真实模型凭据只在运行时设置。
 - 安装包自带 Python 和 Chromium。桌面监听 `127.0.0.1:8090`，数据库、主密钥、日志和截图位于用户数据目录。启动器通过 `PLATFORM_WORKER_CACHE_DIR` 将探索快照写入用户数据目录下的 `cache/`。Compose worker 将缓存写入 `worker-data` 卷的 `/state/cache`。
 - 桌面日志在用户数据目录的 `desktop.log`。服务端通过 `docker compose -f deploy/compose.yaml --profile worker logs control worker` 查看日志。常规日志和报告仍需按业务数据治理要求存放。

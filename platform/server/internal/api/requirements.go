@@ -28,6 +28,7 @@ type requirementImportRequest struct {
 
 func (s *Server) registerRequirements(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/requirements/import", s.tenant(s.importRequirements))
+	mux.HandleFunc("POST /api/requirements/documents", s.tenant(s.uploadRequirementDocument))
 	mux.HandleFunc("PATCH /api/requirements/{id}", s.tenant(s.reviseRequirement))
 	mux.HandleFunc("GET /api/requirements/{id}/history", s.tenant(s.requirementHistory))
 	mux.HandleFunc("PUT /api/requirements/{id}/revisions/{revision}/versions/{versionId}", s.tenant(s.linkRequirementVersion))
@@ -57,11 +58,15 @@ func (s *Server) importRequirements(w http.ResponseWriter, r *http.Request, tena
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.saveImportedRequirements(w, r, tenantID, request.ProjectID, items)
+}
+
+func (s *Server) saveImportedRequirements(w http.ResponseWriter, r *http.Request, tenantID, projectID string, items []store.RequirementContent) {
 	ids := make([]string, len(items))
 	for index := range ids {
 		ids[index] = id()
 	}
-	if err := s.st.ImportRequirements(r.Context(), tenantID, request.ProjectID, ids, items); err != nil {
+	if err := s.st.ImportRequirements(r.Context(), tenantID, projectID, ids, items); err != nil {
 		failRequirementStore(w, err)
 		return
 	}
@@ -96,8 +101,15 @@ func parseRequirementsCSV(text string) ([]store.RequirementContent, error) {
 	reader := csv.NewReader(strings.NewReader(text))
 	reader.FieldsPerRecord = 3
 	header, err := reader.Read()
-	if err != nil || header[0] != "code" || header[1] != "title" || header[2] != "content" {
-		return nil, errors.New("CSV 表头必须为 code,title,content")
+	if err != nil {
+		return nil, errors.New("CSV 表头必须为 code,title,content 或 编号,标题,内容")
+	}
+	for index, column := range header {
+		header[index] = strings.ToLower(strings.TrimSpace(column))
+	}
+	columns := strings.Join(header, ",")
+	if columns != "code,title,content" && columns != "编号,标题,内容" {
+		return nil, errors.New("CSV 表头必须为 code,title,content 或 编号,标题,内容")
 	}
 	var items []store.RequirementContent
 	for {

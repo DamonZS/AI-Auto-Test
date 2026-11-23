@@ -30,17 +30,18 @@ def prepare(server, browser_url, token_file, desktop_payload=None):
         raise RuntimeError("Production authentication is not enforced")
 
     if desktop_payload:
-        register_in_desktop_ui(server, desktop_payload)
+        register_in_desktop_ui(server, desktop_payload, activate_worker=token_file is None)
     web_token = login(server)
     tenants = api(server, "/api/tenants", token=web_token)
     if len(tenants) != 1 or tenants[0]["role"] != "owner" or tenants[0]["name"] != "Deployment smoke":
         raise RuntimeError("Smoke requires a fresh database provisioned with only the temporary owner")
     tenant = tenants[0]["id"]
-    service_token = api(server, "/api/auth/service-tokens", "POST", {"scope": "worker"},
-                        tenant, web_token)["token"]
-    descriptor = os.open(token_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write(service_token + "\n")
+    if token_file is not None:
+        service_token = api(server, "/api/auth/service-tokens", "POST", {"scope": "worker"},
+                            tenant, web_token)["token"]
+        descriptor = os.open(token_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(service_token + "\n")
     project = api(server, "/api/projects", "POST", {
         "name": "Deployment smoke", "base_url": browser_url,
     }, tenant, web_token)["id"]
@@ -55,7 +56,7 @@ def prepare(server, browser_url, token_file, desktop_payload=None):
     print(json.dumps({"tenant": tenant, "run": run}))
 
 
-def register_in_desktop_ui(server, payload):
+def register_in_desktop_ui(server, payload, activate_worker):
     sys.path.insert(0, str(payload / "site"))
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(payload / "browsers")
     from playwright.sync_api import expect, sync_playwright
@@ -69,6 +70,12 @@ def register_in_desktop_ui(server, payload):
         page.get_by_label("密码", exact=True).fill(os.environ["PLATFORM_AUTH_PASSWORD"])
         page.get_by_role("button", name="创建工作区", exact=True).click()
         expect(page.get_by_role("button", name="概览", exact=True)).to_be_visible(timeout=15000)
+        if activate_worker:
+            page.get_by_role("button", name="设置", exact=True).click()
+            worker = page.get_by_role("region", name="桌面 Worker", exact=True)
+            expect(worker.get_by_role("status")).to_have_text("未激活")
+            worker.get_by_role("button", name="激活 Worker", exact=True).click()
+            expect(worker.get_by_role("status")).to_have_text("已激活", timeout=15000)
         page.reload()
         expect(page.get_by_role("button", name="登录", exact=True)).to_be_visible(timeout=15000)
         expect(page.get_by_label("工作区名称", exact=True)).to_have_count(0)
@@ -116,13 +123,15 @@ if __name__ == "__main__":
     commands = parser.add_subparsers(dest="command", required=True)
     setup = commands.add_parser("prepare")
     setup.add_argument("--browser-url")
-    setup.add_argument("--worker-token-file", required=True, type=Path)
+    setup.add_argument("--worker-token-file", type=Path)
     setup.add_argument("--desktop-payload", type=Path)
     wait = commands.add_parser("check")
     wait.add_argument("tenant")
     wait.add_argument("run")
     args = parser.parse_args()
     if args.command == "prepare":
+        if not args.desktop_payload and not args.worker_token_file:
+            setup.error("--worker-token-file is required when --desktop-payload is absent")
         prepare(args.server, args.browser_url or args.server, args.worker_token_file, args.desktop_payload)
     else:
         check(args.server, args.tenant, args.run)

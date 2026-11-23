@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
+import DesktopWorkerActivation from '../components/DesktopWorkerActivation.vue'
 
 const form = ref({
   provider: '',
@@ -10,6 +11,7 @@ const form = ref({
   max_steps: 40,
   max_tokens: 20000,
   max_duration_seconds: 600,
+  playwright_browser: '',
   ego_enabled: false,
   laya_enabled: false,
   jev_enabled: false,
@@ -30,6 +32,7 @@ function applySettings(settings) {
     max_steps: settings.max_steps,
     max_tokens: settings.max_tokens,
     max_duration_seconds: settings.max_duration_seconds,
+    playwright_browser: settings.playwright_browser || '',
     ego_enabled: settings.ego_enabled,
     laya_enabled: settings.laya_enabled,
     jev_enabled: settings.jev_enabled,
@@ -70,6 +73,7 @@ onMounted(load)
 <template>
   <div v-if="loading" class="state" role="status">正在读取设置…</div>
   <div v-else class="settings-page">
+    <DesktopWorkerActivation />
     <p v-if="error" class="message error" role="alert">{{ error }}</p>
     <p v-if="notice" class="message success" role="status">{{ notice }}</p>
 
@@ -88,11 +92,11 @@ onMounted(load)
           </label>
           <label class="field">
             <span>模型名称</span>
-            <input v-model="form.model" name="model" required autocomplete="off" />
+            <input v-model="form.model" name="model" :required="Boolean(form.base_url || form.api_key)" autocomplete="off" />
           </label>
           <label class="field wide">
             <span>API Base URL</span>
-            <input v-model="form.base_url" name="base_url" type="url" required autocapitalize="none" spellcheck="false" />
+            <input v-model="form.base_url" name="base_url" type="url" :required="Boolean(form.model || form.api_key)" autocapitalize="none" spellcheck="false" />
           </label>
           <label class="field wide">
             <span>API Key</span>
@@ -129,23 +133,52 @@ onMounted(load)
         </div>
       </section>
 
+      <section class="section" aria-labelledby="browser-settings-title">
+        <header class="section-head">
+          <h3 id="browser-settings-title">浏览器</h3>
+        </header>
+        <div class="form-grid">
+          <div class="field">
+            <label for="playwright-browser">Playwright 浏览器</label>
+            <select id="playwright-browser" v-model="form.playwright_browser" name="playwright_browser" aria-describedby="playwright-browser-status">
+              <option value="">执行机默认</option>
+              <option value="chromium">Chromium</option>
+              <option value="firefox">Firefox</option>
+              <option value="webkit">WebKit</option>
+              <option value="chrome">Google Chrome</option>
+              <option value="msedge">Microsoft Edge</option>
+            </select>
+            <small id="playwright-browser-status">执行机需安装所选浏览器，缺失时运行会报错。</small>
+          </div>
+        </div>
+      </section>
+
       <section class="section" aria-labelledby="enhanced-settings-title">
         <header class="section-head">
           <h3 id="enhanced-settings-title">增强档</h3>
         </header>
         <div class="switch-list">
-          <label class="switch-row">
-            <input v-model="form.ego_enabled" name="ego_enabled" type="checkbox" />
-            <span>Ego 浏览器</span>
-          </label>
-          <label class="switch-row">
-            <input v-model="form.laya_enabled" name="laya_enabled" type="checkbox" />
-            <span>Laya 决策</span>
-          </label>
-          <label class="switch-row">
-            <input v-model="form.jev_enabled" name="jev_enabled" type="checkbox" />
-            <span>JEV 决策</span>
-          </label>
+          <div class="field">
+            <label class="switch-row">
+              <input v-model="form.ego_enabled" name="ego_enabled" type="checkbox" aria-describedby="ego-provider-status" />
+              <span>请求 Ego 浏览器</span>
+            </label>
+            <small id="ego-provider-status">仅支持本机冒烟。租户 UI 运行记录降级，使用 Playwright。</small>
+          </div>
+          <div class="field">
+            <label class="switch-row">
+              <input v-model="form.laya_enabled" name="laya_enabled" type="checkbox" aria-describedby="laya-provider-status" />
+              <span>Laya 决策</span>
+            </label>
+            <small id="laya-provider-status">自然语言 UI 用例使用上方配置的兼容 Laya 决策协议的模型。</small>
+          </div>
+          <div class="field">
+            <label class="switch-row">
+              <input v-model="form.jev_enabled" name="jev_enabled" type="checkbox" aria-describedby="jev-provider-status" />
+              <span>请求 JEV 决策</span>
+            </label>
+            <small id="jev-provider-status">缺少已验证的服务接口。租户 UI 运行记录降级，沿用原有决策流程。</small>
+          </div>
         </div>
       </section>
 
@@ -167,14 +200,15 @@ onMounted(load)
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .wide { grid-column: 1 / -1; }
 .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.field > span { font-size: 12px; color: var(--muted); }
+.field > span, .field > label:not(.switch-row) { font-size: 12px; color: var(--muted); }
 .field input { width: 100%; min-height: 36px; }
-.field input:focus-visible, .switch-row input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.field select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0 10px; min-height: 36px; }
+.field input:focus-visible, .field select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .field small { color: var(--muted); font-size: 12px; }
 .budget-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.switch-list { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.switch-list { display: grid; gap: 12px; }
 .switch-row { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; }
-.switch-row input { accent-color: var(--accent); width: 16px; height: 16px; }
+.switch-row input { accent-color: var(--accent); width: 16px; min-height: 16px; height: 16px; }
 .form-actions { display: flex; justify-content: flex-end; }
 .form-actions button { min-height: 36px; }
 .form-actions button:disabled { opacity: .55; cursor: wait; }

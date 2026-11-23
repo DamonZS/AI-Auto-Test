@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -17,6 +18,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from auto_ai.browser_diagnostics import BrowserDiagnostics, classify_events, redact_urls, safe_text
+
+MAX_STEP_SCREENSHOTS = 4
+MAX_STEP_SCREENSHOT_BYTES = 128 * 1024
 
 
 def parse_args():
@@ -329,6 +333,8 @@ def _structured_steps(scenario):
         required = required_fields[action] + tuple(field for field in ("frame", "row") if field in step)
         if any(not isinstance(step.get(key), str) or not step[key].strip() for key in required):
             raise ValueError(f"{action} 步骤缺少必填字段")
+        if "screenshot" in step and not isinstance(step["screenshot"], bool):
+            raise ValueError("screenshot 必须为布尔值")
     return steps
 
 
@@ -336,6 +342,7 @@ async def _execute_structured_steps(steps, data, session, started):
     assertions = []
     results = []
     failures = []
+    screenshot_attempts = 0
 
     for index, step in enumerate(steps, start=1):
         action = step["action"]
@@ -407,6 +414,12 @@ async def _execute_structured_steps(steps, data, session, started):
             break
         finally:
             evidence["duration_ms"] = int((time.monotonic() - step_started) * 1000)
+            if step.get("screenshot") is True:
+                if screenshot_attempts < MAX_STEP_SCREENSHOTS:
+                    screenshot_attempts += 1
+                    evidence.update(await _capture_step_screenshot(session.page))
+                else:
+                    evidence["screenshot_error"] = "limit"
 
     passed_assertions = bool(assertions) and all(item["passed"] for item in assertions)
     status = "failed" if failures else "passed" if passed_assertions else "needs_review"
@@ -423,6 +436,24 @@ async def _execute_structured_steps(steps, data, session, started):
         "report": f"结构化 UI 步骤执行 {len(results)}/{len(steps)}，断言 {len(assertions)} 项。",
         "fallback_reason": "",
     }
+
+
+async def _capture_step_screenshot(page):
+    try:
+        screenshot = await page.screenshot(
+            type="jpeg",
+            quality=60,
+            scale="css",
+            timeout=2000,
+            mask=[frame.locator("input, textarea, select, [contenteditable]:not([contenteditable='false'])")
+                  for frame in page.frames],
+            mask_color="#000000",
+        )
+    except Exception:
+        return {"screenshot_error": "unavailable"}
+    if len(screenshot) > MAX_STEP_SCREENSHOT_BYTES:
+        return {"screenshot_error": "too_large"}
+    return {"screenshot_jpeg": base64.b64encode(screenshot).decode("ascii")}
 
 
 async def execute_task(task: dict, settings: dict) -> dict:

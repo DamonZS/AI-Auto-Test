@@ -8,6 +8,13 @@ import StatusTag from '../components/StatusTag.vue'
 const stats = ref({})
 const trends = ref({ days: [] })
 const datasets = ref([])
+const percent = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1 })
+const signedPercent = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1, signDisplay: 'exceptZero' })
+const comparisonMetrics = [
+  { key: 'completed_runs', label: '完成执行数' },
+  { key: 'pass_rate', label: '通过率', formatter: percent },
+  { key: 'new_defects', label: '新增缺陷' },
+]
 
 const passRate = computed(() => {
   const d = trends.value.days || []
@@ -19,6 +26,13 @@ const passRate = computed(() => {
 const maxDaily = computed(() =>
   Math.max(1, ...(trends.value.days || []).map((d) => d.total || 0)),
 )
+
+const comparison = computed(() => trends.value.comparison)
+
+function formatComparison(value, formatter) {
+  if (value == null) return '—'
+  return formatter ? formatter.format(value) : value
+}
 
 async function load() {
   stats.value = await api.get('/api/overview')
@@ -56,6 +70,31 @@ defineExpose({ load })
       </div>
     </div>
     <p v-else class="empty">还没有执行数据</p>
+  </section>
+
+  <section v-if="comparison">
+    <h3 id="overview-monthly-trends">月度趋势 · UTC</h3>
+    <div class="comparison-table" tabindex="0" role="region" aria-labelledby="overview-monthly-trends">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">指标</th>
+            <th scope="col">{{ comparison.current.start.slice(0, 7) }}</th>
+            <th scope="col">环比 <span>{{ comparison.mom.baseline.start.slice(0, 7) }}</span></th>
+            <th scope="col">同比 <span>{{ comparison.yoy.baseline.start.slice(0, 7) }}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="metric in comparisonMetrics" :key="metric.key">
+            <th scope="row">{{ metric.label }}</th>
+            <td>{{ formatComparison(comparison.current[metric.key], metric.formatter) }}</td>
+            <td>{{ formatComparison(comparison.mom.change[metric.key], signedPercent) }}</td>
+            <td>{{ formatComparison(comparison.yoy.change[metric.key], signedPercent) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="comparison-note">按完整自然月计算相对变化。缺少数据或基期值为 0 时显示「—」。</p>
   </section>
 
   <section>
@@ -109,5 +148,13 @@ h4 { font-size: 12px; font-weight: 500; color: var(--muted); margin: 0 0 8px; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .chip { display: inline-block; background: #f1f1f4; border-radius: 4px; padding: 1px 6px; margin-right: 4px; font-size: 12px; color: var(--muted); }
 .empty { color: var(--muted); }
+.comparison-table { max-inline-size: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.comparison-table table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.comparison-table th, .comparison-table td { padding: 10px 14px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.comparison-table thead th { background: #fbfbfc; color: var(--muted); font-weight: 500; }
+.comparison-table thead span { display: block; }
+.comparison-table tbody th { position: sticky; inset-inline-start: 0; background: var(--panel); font-weight: 500; }
+.comparison-table tbody tr:last-child > * { border-bottom: 0; }
+.comparison-note { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
 @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } .split { grid-template-columns: 1fr; } }
 </style>

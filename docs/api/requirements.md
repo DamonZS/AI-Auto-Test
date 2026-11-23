@@ -13,6 +13,8 @@
 | 方法与路径 | 请求 | 成功响应 |
 | --- | --- | --- |
 | `POST /api/requirements/import` | JSON `project_id`、`filename`、`text`，均为必填字符串。Markdown/TXT 可选 `code`、`title` | `201` `{"ids":["..."]}`，按导入顺序返回 |
+| `POST /api/requirements/documents?project_id=…&preview=1` | `multipart/form-data`，文件字段 `file` | `200` `{"items":[{"code":"…","title":"…","content":"…"}]}` |
+| `POST /api/requirements/documents?project_id=…&preview=0` | 同一个文件字段 `file` | `201` `{"ids":["…"]}` |
 | `PATCH /api/requirements/{id}` | JSON 至少提交一个字符串字段 `code`、`title`、`content` | `200`，返回新增的修订快照 |
 | `GET /api/requirements/{id}/history` | 无请求体 | `200`，返回该需求的修订快照列表，按 `revision_no` 升序 |
 | `PUT /api/requirements/{id}/revisions/{revision}/versions/{versionId}` | 无请求体。`revision` 为正整数 | `204`。相同关联重复提交效果相同 |
@@ -21,6 +23,10 @@
 快照包含 `revision_no`（从 1 开始的整数）、`code`、`title`、`content`、`created_at`（SQLite UTC 时间字符串）。每条 `changes` 含 `requirement_id`、`previous`（上一修订快照或 `null`）、`current`（已关联的快照）和 `affected_case_count`。后续编辑不会改变已关联的 `current`。同一需求的多条修订允许关联同一项目版本，版本总数按当前关联用例去重。首版修订的 `previous` 为 `null`。无需求关联的有效项目版本返回空列表。
 
 ## 导入和修订规则
+
+- 「上传需求说明书」先解析预览，确认时重新解析同一文件并事务写入需求与初始修订。保存解析出的文本，上传原件只在请求期间处理。
+- PDF 提取文字层，Word `.docx` 提取段落和表格，作为单条说明书导入。Excel `.xlsx` 的需求表按行导入。没有识别到需求表头时，以工作簿的表格文本形成一条需求。
+- 单文件上限 10 MiB，解析结果合计上限 1 MiB，单批上限 500 条。图片扫描版 PDF 需先 OCR 得到可选择文字的版本。旧二进制 `.doc`、`.xls` 需先另存为 `.docx`、`.xlsx`。
 
 - 导入接受 UTF-8，可带 BOM，文本上限为 1 MiB。`.csv` 使用 `code,title,content` 表头，支持 CSV 引号及多行字段。每行创建一条需求，标题必填，编号和内容可为空。任意行不合法时整批不写入。
 - `.md`、`.markdown` 和 `.txt` 各创建一条需求。内容为原文（去掉 BOM），标题默认取文件名去掉扩展名。空白文件无效。

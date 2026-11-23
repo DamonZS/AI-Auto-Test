@@ -38,7 +38,7 @@ try {
     $launchStyle = if ($NativeWindow) { 'Normal' } else { 'Hidden' }
     $desktop = Start-Process -FilePath $runtime -ArgumentList $options -Environment @{ PLATFORM_WORKER_TOKEN = ''; PLATFORM_AUTH_PASSWORD = ''; PLATFORM_AUTH_USERNAME = '' } -WindowStyle $launchStyle -PassThru
     $smoke = Join-Path $PSScriptRoot '../deploy/smoke.py'
-    $fixture = & (Join-Path $install 'python/python.exe') $smoke $server prepare --desktop-payload $install --worker-token-file (Join-Path $data 'worker-token.txt') | ConvertFrom-Json
+    $fixture = & (Join-Path $install 'python/python.exe') $smoke $server prepare --desktop-payload $install | ConvertFrom-Json
     python $smoke $server check $fixture.tenant $fixture.run
     if ($NativeWindow) {
         $desktop.Refresh()
@@ -57,7 +57,7 @@ try {
         if ($desktop.MainWindowTitle -ne 'Auto-Test') { throw 'Native window was not restored' }
         'Windows native window, close to tray, and restore passed'
     }
-    foreach ($file in 'platform.db', 'platform.db.key') {
+    foreach ($file in 'platform.db', 'platform.db.key', 'desktop-worker-token.txt') {
         if (-not (Test-Path -LiteralPath (Join-Path $data $file))) { throw "Missing runtime file $file" }
     }
     "Windows installed smoke passed in $([int]$stopwatch.Elapsed.TotalSeconds)s"

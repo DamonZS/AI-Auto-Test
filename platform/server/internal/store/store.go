@@ -58,11 +58,13 @@ func (s *Store) Close() error { return s.DB.Close() }
 
 func migrateAdditiveColumns(db *sql.DB) error {
 	statements := []string{
+		"ALTER TABLE tenant_settings ADD COLUMN playwright_browser TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE cases ADD COLUMN dataset_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE cases ADD COLUMN data_row_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE runs ADD COLUMN dataset_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE runs ADD COLUMN data_row_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE runs ADD COLUMN suite_run_id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE runs ADD COLUMN performance_json TEXT NOT NULL DEFAULT 'null'",
 		"ALTER TABLE suites ADD COLUMN case_ids TEXT NOT NULL DEFAULT '[]'",
 		"ALTER TABLE suites ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 1 CHECK (max_concurrency > 0)",
 		"ALTER TABLE suite_runs ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 1 CHECK (max_concurrency > 0)",

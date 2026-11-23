@@ -8,7 +8,7 @@ UI cases may store a deterministic ordered scenario in the existing versioned `c
     {"action": "navigate", "url": "https://test.example/"},
     {"action": "fill", "role": "textbox", "name": "Account", "data_key": "account"},
     {"action": "click", "role": "button", "name": "Sign in"},
-    {"action": "wait_text", "text": "Welcome"}
+    {"action": "wait_text", "text": "Welcome", "screenshot": true}
   ]
 }
 ```
@@ -18,5 +18,7 @@ Supported actions in the migrated main-platform runner are `navigate`, `click`, 
 Set `frame` to the iframe's `data-testid` to target a frame. Set `row` to the visible text identifying a single accessible row. Both fields are optional and can be combined. Scoped actions require an exact accessible role and name. Playwright works through open shadow roots with these locators. Use `select` for a native select with its option value in `data_key`, and `check` or `uncheck` for native checkbox state. Apply `frame` and `row` to text assertions when the expected text is scoped.
 
 `wait_text` and `assert_text` are page assertions. A run passes only if at least one assertion ran, every assertion passed and every requested action completed. `assert_url` accepts `contains` (default) or `equals` in `match`. A scenario without an assertion ends as `needs_review`.
+
+Add the optional boolean `screenshot` to any step. Only `true` requests a screenshot after that step, including when the step fails. The capture limits, masking scope, and result fields are in the [run step evidence contract](../api/run-step-evidence.md).
 
 The structure is supplied as the case scenario JSON object. Run creation and heartbeat remain unchanged, and the worker receives the versioned scenario with the existing tenant-scoped data row. Natural-language UI scenarios continue through the existing Deep Agents path. API and performance scenarios retain their existing JSON contracts.

@@ -6,11 +6,14 @@ import (
 	"net/http"
 )
 
-type runStep struct {
-	Number     int    `json:"step"`
-	Action     string `json:"action"`
-	Status     string `json:"status"`
-	DurationMS int    `json:"duration_ms"`
+type performanceResult struct {
+	Requests  *int     `json:"requests"`
+	Failures  int      `json:"failed_requests"`
+	ErrorRate float64  `json:"error_rate"`
+	RPS       float64  `json:"rps"`
+	P50       *float64 `json:"p50_ms"`
+	P95       *float64 `json:"p95_ms"`
+	P99       *float64 `json:"p99_ms"`
 }
 
 func (s *Server) runCase(w http.ResponseWriter, r *http.Request, tid string) {
@@ -95,6 +98,8 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request, tid string) {
 		return
 	}
 	out[0]["steps"] = json.RawMessage(out[0]["steps"].(string))
+	out[0]["performance"] = json.RawMessage(out[0]["performance_json"].(string))
+	delete(out[0], "performance_json")
 	write(w, http.StatusOK, out[0])
 }
 
@@ -147,6 +152,7 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, tid string) {
 
 func (s *Server) finishRun(w http.ResponseWriter, r *http.Request, tid string) {
 	var b struct {
+		performanceResult
 		Status         string    `json:"status"`
 		Passed         bool      `json:"passed"`
 		NeedsReview    bool      `json:"needs_review"`
@@ -172,11 +178,17 @@ func (s *Server) finishRun(w http.ResponseWriter, r *http.Request, tid string) {
 		fail(w, http.StatusBadRequest, "请求体无效")
 		return
 	}
-	for index, step := range b.Steps {
-		if step.Number != index+1 || step.Action == "" || step.DurationMS < 0 || (step.Status != "passed" && step.Status != "failed") {
-			fail(w, http.StatusBadRequest, "步骤证据无效")
+	performance := "null"
+	if b.Requests != nil {
+		if *b.Requests < 0 || b.Failures < 0 || b.Failures > *b.Requests || b.ErrorRate < 0 || b.ErrorRate > 1 || b.RPS < 0 {
+			fail(w, http.StatusBadRequest, "性能指标无效")
 			return
 		}
+		performance = mustJSON(b.performanceResult)
+	}
+	if !validRunSteps(b.Steps) {
+		fail(w, http.StatusBadRequest, "步骤证据无效")
+		return
 	}
 	rid := r.PathValue("id")
 	tx, err := s.st.DB.BeginTx(r.Context(), nil)
@@ -186,10 +198,10 @@ func (s *Server) finishRun(w http.ResponseWriter, r *http.Request, tid string) {
 	}
 	defer tx.Rollback()
 	err = tx.QueryRow(`UPDATE runs SET status = ?, passed = ?, needs_review = ?, self_healed = ?,
-		token_in = ?, token_out = ?, duration_ms = ?, report = ?, fallback_reason = ?, ended_at = datetime('now')
+		token_in = ?, token_out = ?, duration_ms = ?, report = ?, fallback_reason = ?, performance_json = ?, ended_at = datetime('now')
 		WHERE id = ? AND tenant_id = ? RETURNING id`,
 		b.Status, boolInt(b.Passed), boolInt(b.NeedsReview), boolInt(b.SelfHealed),
-		b.TokenIn, b.TokenOut, b.DurationMS, b.Report, b.FallbackReason, rid, tid).Scan(&rid)
+		b.TokenIn, b.TokenOut, b.DurationMS, b.Report, b.FallbackReason, performance, rid, tid).Scan(&rid)
 	if err == sql.ErrNoRows {
 		fail(w, http.StatusNotFound, "执行记录不存在")
 		return

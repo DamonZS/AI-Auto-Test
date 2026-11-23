@@ -10,6 +10,7 @@ const projects = ref([])
 const versions = ref([])
 const documents = ref([])
 const create = ref({ kind: '', project_id: '', version_id: '', title: '' })
+const generationContext = ref('')
 const selected = ref(null)
 const draft = ref(null)
 const note = ref('')
@@ -50,6 +51,7 @@ async function perform(operation) {
   try {
     await operation()
   } catch (failure) {
+    feedback.value = ''
     let detail = failure.detail
     if (!detail) {
       try { detail = JSON.parse(failure.message) } catch { detail = null }
@@ -63,10 +65,18 @@ async function perform(operation) {
   }
 }
 
-async function createDocument() {
-  accept(await api.post(collection, { ...create.value, fields: {} }))
+async function createDocument(generate) {
+  if (generate) {
+    if (!generationContext.value) throw new Error('请填写功能测试背景')
+    feedback.value = '正在生成草稿…'
+    accept(await api.post(`${collection}/generate`, { ...create.value, context: generationContext.value }))
+    generationContext.value = ''
+  } else {
+    feedback.value = '正在创建草稿…'
+    accept(await api.post(collection, { ...create.value, fields: {} }))
+  }
   create.value.title = ''
-  feedback.value = '草稿已创建'
+  feedback.value = generate ? '草稿已生成，请核对内容后提审' : '草稿已创建'
 }
 
 async function save(submit) {
@@ -114,7 +124,8 @@ onMounted(() => perform(async () => {
 
 <template>
   <div class="workbench">
-    <form class="panel" :action="collection" method="post" aria-labelledby="wb-new" @submit.prevent="perform(createDocument)">
+    <form class="panel" :action="collection" method="post" aria-labelledby="wb-new"
+      @submit.prevent="perform(() => createDocument($event.submitter?.value === 'generate'))">
       <h3 id="wb-new">新建产物</h3>
       <fieldset class="create-grid" :disabled="busy" aria-label="新建产物字段">
         <label>类型<select v-model="create.kind" name="kind" required>
@@ -129,7 +140,13 @@ onMounted(() => perform(async () => {
           <option v-for="item in availableVersions" :key="item.id" :value="item.id">{{ item.name }}</option>
         </select></label>
         <label>标题<input v-model.trim="create.title" name="title" required /></label>
-        <button class="primary" type="submit">创建草稿</button>
+        <label class="wide">功能测试背景（AI 生成时必填）
+          <textarea v-model.trim="generationContext" rows="3" placeholder="填写需求、变更或已确认的执行情况，请勿填写凭据" />
+        </label>
+        <div class="actions wide">
+          <button type="submit" value="manual">创建草稿</button>
+          <button type="submit" value="generate" class="primary">AI 生成草稿</button>
+        </div>
       </fieldset>
     </form>
 
@@ -177,6 +194,7 @@ onMounted(() => perform(async () => {
             <fieldset v-for="check in template.checks" :key="check.key" class="check"
               :aria-describedby="missing.includes(check.key) ? 'wb-error' : undefined">
               <legend>{{ check.label }}</legend>
+              <p v-if="draft.checks[check.key].guidance" class="guidance">核验建议：{{ draft.checks[check.key].guidance }}</p>
               <label>结果<select v-model="draft.checks[check.key].result" :name="`${check.key}.result`" :aria-invalid="missing.includes(check.key)">
                 <option value="">未检查</option><option value="pass">通过</option><option value="fail">未通过</option>
               </select></label>
@@ -243,6 +261,7 @@ onMounted(() => perform(async () => {
 .panel { padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
 .columns { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr); align-items: start; gap: 14px; }
 .create-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); align-items: end; gap: 10px; }
+.wide { grid-column: 1 / -1; }
 fieldset { min-width: 0; border: 0; margin: 0; padding: 0; }
 label { display: grid; gap: 4px; }
 input, select, textarea { width: 100%; padding: 7px 10px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
@@ -253,6 +272,7 @@ h3, h4 { margin: 0 0 12px; }
 .record-header h3 { margin-bottom: 4px; }
 .record-header span, .documents span { color: var(--muted); }
 .check { border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-bottom: 10px; }
+.guidance { margin: 0 0 10px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .documents { display: grid; gap: 6px; list-style: none; margin: 0; padding: 0; }
 .documents button { display: grid; gap: 4px; width: 100%; text-align: start; overflow-wrap: anywhere; }
@@ -260,7 +280,7 @@ h3, h4 { margin: 0 0 12px; }
 .section { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 10px; }
 dd { margin: 0; overflow-wrap: anywhere; }
-.feedback:empty { display: none; }
+.feedback:empty { position: absolute; }
 .error { color: var(--bad); }
 [aria-invalid='true'] { border-color: var(--bad); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

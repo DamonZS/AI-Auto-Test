@@ -54,6 +54,33 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Document' }
         default: { $ref: '#/components/responses/Error' }
+  /api/workbench/documents/generate:
+    post:
+      summary: 使用当前租户的模型生成并保存一份草稿
+      description: 需要工作区编辑权限。生成仅处理功能测试文本。检查建议与人工填写的结果、证据分开。所有产物仍须人工提审和签核。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [kind, project_id, version_id, title, context]
+              properties:
+                kind: { $ref: '#/components/schemas/Kind' }
+                project_id: { type: string, minLength: 1 }
+                version_id: { type: string, minLength: 1 }
+                title: { type: string, minLength: 1 }
+                context: { type: string, minLength: 1, description: 功能测试背景。整个请求体上限为 32 KiB。 }
+      responses:
+        '201': { $ref: '#/components/responses/Document' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
   /api/workbench/documents/{id}/review:
     parameters:
       - $ref: '#/components/parameters/ID'
@@ -112,7 +139,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Document' }
     Error:
-      description: 400 参数无效，401/403 共享入口拒绝，404 租户或资源范围外，409 状态或修订冲突，422 未满足提审条件，500 服务异常
+      description: 400 参数无效，401/403 共享入口拒绝，404 租户或资源范围外，409 状态或修订冲突，422 未满足提审或生成条件，500 服务异常，502 模型不可用或返回了无效草稿
       content:
         application/json:
           schema:
@@ -167,6 +194,7 @@ components:
             properties:
               result: { type: string, enum: ['', pass, fail] }
               evidence: { type: string }
+              guidance: { type: string, description: 待人工核验的检查建议，与结果和证据独立 }
     Create:
       allOf:
         - $ref: '#/components/schemas/Content'

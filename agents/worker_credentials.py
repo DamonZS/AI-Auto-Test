@@ -19,6 +19,28 @@ def load_worker_token() -> str:
     return (token or "").strip()
 
 
+async def execute_configured_ui(execute_task, task: dict, settings: dict) -> dict:
+    from auto_ai.browser import worker_browser
+
+    browser_token = worker_browser.set(settings.get("playwright_browser", ""))
+    try:
+        result = await execute_task(task, settings)
+    finally:
+        worker_browser.reset(browser_token)
+
+    reasons = []
+    if settings.get("ego_enabled"):
+        reasons.append("Ego 仅支持本机冒烟，租户 UI 执行降级到 Playwright")
+    if settings.get("jev_enabled"):
+        reasons.append("JEV 缺少已验证的服务接口，保留原有决策流程")
+    if previous_reason := result.get("fallback_reason"):
+        reasons.append(previous_reason)
+    if reasons:
+        result["fallback_reason"] = "；".join(reasons)
+        result["report"] = f"{result['fallback_reason']}\n{result['report']}"
+    return result
+
+
 async def run(server: str, poll: float, token: str) -> None:
     import httpx
 
@@ -38,9 +60,12 @@ async def run(server: str, poll: float, token: str) -> None:
                 await asyncio.sleep(poll)
                 continue
             settings = await request(client, "GET", f"{server}/api/agent/settings", headers)
-            result = await execute_task(task, settings)
+            if task.get("type", "ui") == "ui":
+                result = await execute_configured_ui(execute_task, task, settings)
+            else:
+                result = await execute_task(task, settings)
             if task.get("type") == "perf":
-                result.pop("failures", None)
+                result["failed_requests"] = result.pop("failures", 0)
             await request(
                 client,
                 "POST",

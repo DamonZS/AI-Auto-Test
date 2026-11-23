@@ -280,8 +280,74 @@ class ExecuteUITaskTests(unittest.TestCase):
         self.assertNotIn("private-account", result["report"])
         self.assertNotIn("private-account", str(result["failures"]))
 
+    def test_screenshot_opt_in_requires_a_boolean(self):
+        result = self.run_task([], scenario={"steps": [
+            {"action": "assert_url", "expected": "example.test", "screenshot": "true"},
+        ]})
+        self.assertEqual(result["status"], "error")
+        self.assertIn("screenshot", result["report"])
+
+    def test_screenshot_failure_and_limits_leave_assertions_unchanged(self):
+        session = FakeSession([])
+        session.page = FakePage()
+        session.page.frames = []
+        session.page.screenshot = AsyncMock(side_effect=[
+            RuntimeError("fixture-private-value"), *([b"x" * (128 * 1024 + 1)] * 3),
+        ])
+        scenario = {"steps": [
+            {"action": "assert_url", "expected": "example.test", "screenshot": True} for _ in range(5)
+        ]}
+        result = self.run_task([], session=session, scenario=scenario)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(session.page.screenshot.await_count, 4)
+        self.assertEqual([step["screenshot_error"] for step in result["steps"]], [
+            "unavailable", "too_large", "too_large", "too_large", "limit",
+        ])
+        self.assertTrue(all("screenshot_jpeg" not in step for step in result["steps"]))
+        self.assertNotIn("fixture-private-value", str(result))
+
 
 class LocalBrowserDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_opt_in_screenshots_capture_passed_and_failed_steps_with_masked_inputs(self):
+        import time
+        from agents.ui_runner import _execute_structured_steps
+        from auto_ai.browser import browser_session
+        from auto_ai.config import config
+
+        with patch.object(config, "NEO4J_ENABLED", False):
+            async with browser_session() as session:
+                await session.page.set_content('''
+                    <input aria-label="Account" style="position:absolute;left:10px;top:10px;width:200px;height:40px">
+                    <iframe style="position:absolute;left:0;top:100px;border:0"
+                      srcdoc="<textarea style='width:200px;height:40px'>fixture-private-note</textarea>"></iframe>
+                ''')
+                steps = [
+                    {"action": "assert_url", "expected": "about:blank", "screenshot": False},
+                    {"action": "fill", "role": "textbox", "name": "Account", "data_key": "account", "screenshot": True},
+                    {"action": "assert_url", "expected": "missing", "screenshot": True},
+                    {"action": "assert_url", "expected": "about:blank", "screenshot": True},
+                ]
+                result = await _execute_structured_steps(steps, {"account": "fixture-private-account"}, session, time.monotonic())
+                evidence = result["steps"]
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual([step["status"] for step in evidence], ["passed", "passed", "failed"])
+                self.assertNotIn("screenshot_jpeg", evidence[0])
+                for step in evidence[1:]:
+                    pixels = await session.page.evaluate('''async (jpeg) => {
+                        const image = new Image();
+                        image.src = `data:image/jpeg;base64,${jpeg}`;
+                        await image.decode();
+                        const canvas = document.createElement('canvas');
+                        canvas.width = image.width;
+                        canvas.height = image.height;
+                        const context = canvas.getContext('2d');
+                        context.drawImage(image, 0, 0);
+                        return [[100, 30], [100, 125], [500, 30]].map(([x, y]) =>
+                            context.getImageData(x, y, 1, 1).data[0]);
+                    }''', step["screenshot_jpeg"])
+                    self.assertEqual(pixels, [0, 0, 255])
+                self.assertEqual(await session.page.get_by_role("textbox", name="Account").input_value(), "fixture-private-account")
+
     async def test_structured_ui_controls_with_frame_row_and_open_shadow_root(self):
         from html import escape
         from urllib.parse import quote

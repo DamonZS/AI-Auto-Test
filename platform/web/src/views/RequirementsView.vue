@@ -14,6 +14,7 @@ const editingId = ref('')
 const fileInput = ref(null)
 const file = ref(null)
 const useSample = ref(false)
+const preview = ref([])
 const historyId = ref('')
 const history = ref([])
 const revisionNo = ref('')
@@ -55,6 +56,7 @@ function resetForm() {
 function resetImport() {
   file.value = null
   useSample.value = false
+  preview.value = []
   if (fileInput.value) fileInput.value.value = ''
 }
 
@@ -97,23 +99,28 @@ function save() {
   })
 }
 
+function uploadDocument(previewOnly) {
+  const selected = useSample.value ? new File([sampleCsv], '需求示例.csv', { type: 'text/csv' }) : file.value
+  if (!selected) throw new Error('请选择需求文件或载入示例 CSV')
+  if (selected.size > 10 * 1024 * 1024) throw new Error('文件不能超过 10 MiB')
+  const payload = new FormData()
+  payload.append('file', selected)
+  const query = new URLSearchParams({ project_id: projectId.value, preview: previewOnly ? '1' : '0' })
+  return api.upload(`/api/requirements/documents?${query}`, payload)
+}
+
+function previewDocument() {
+  return run(async () => {
+    preview.value = []
+    const { items } = await uploadDocument(true)
+    preview.value = items
+    message.value = `识别到 ${items.length} 条需求，请确认后导入`
+  })
+}
+
 function importRequirements() {
   return run(async () => {
-    let filename = '需求示例.csv'
-    let text = sampleCsv
-    if (!useSample.value) {
-      const selectedFile = file.value
-      if (!selectedFile) throw new Error('请选择文件或载入示例 CSV')
-      if (selectedFile.size > 1024 * 1024) throw new Error('文件不能超过 1 MiB')
-      filename = selectedFile.name
-      const bytes = await selectedFile.arrayBuffer()
-      try {
-        text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-      } catch {
-        throw new Error('文件必须使用 UTF-8 编码')
-      }
-    }
-    const { ids } = await api.post('/api/requirements/import', { project_id: projectId.value, filename, text })
+    const { ids } = await uploadDocument(false)
     resetImport()
     await refreshRows()
     message.value = `已导入 ${ids.length} 条需求`
@@ -174,17 +181,23 @@ onMounted(() => run(async () => {
     </form>
   </section>
   <section v-if="projectId" class="panel">
-    <h2 id="requirement-import-heading">文件导入</h2>
-    <form class="form" aria-labelledby="requirement-import-heading" @submit.prevent="importRequirements">
+    <h2 id="requirement-import-heading">上传需求说明书</h2>
+    <form class="form" aria-labelledby="requirement-import-heading" @submit.prevent="previewDocument">
       <div class="field">
-        <label for="requirement-file">CSV / Markdown / TXT（UTF-8）</label>
-        <input id="requirement-file" ref="fileInput" name="file" type="file" accept=".csv,.md,.markdown,.txt" :disabled="busy"
-          @change="file = $event.target.files[0]; useSample = false" />
+        <label for="requirement-file">PDF / Word（.docx）/ Excel（.xlsx）/ UTF-8 CSV / Markdown / TXT</label>
+        <input id="requirement-file" ref="fileInput" name="file" type="file" accept=".pdf,.docx,.xlsx,.csv,.md,.markdown,.txt" :disabled="busy"
+          @change="file = $event.target.files[0]; useSample = false; preview = []; message = ''; error = ''" />
       </div>
       <button type="button" :disabled="busy" @click="resetImport(); useSample = true">载入示例 CSV</button>
-      <button class="primary" type="submit" :disabled="busy">{{ useSample ? '导入示例' : '导入文件' }}</button>
+      <button type="submit" :disabled="busy || (!file && !useSample)">解析预览</button>
+      <button v-if="preview.length" class="primary" type="button" :disabled="busy" @click="importRequirements">确认导入</button>
     </form>
-    <pre v-if="useSample">{{ sampleCsv }}</pre>
+    <div v-if="preview.length" class="document-preview">
+      <details v-for="(item, index) in preview" :key="index" :open="preview.length === 1">
+        <summary>{{ [item.code, item.title].filter(Boolean).join(' · ') }}</summary>
+        <p class="text">{{ item.content }}</p>
+      </details>
+    </div>
   </section>
   <DataTable
     :rows="projectRows"
@@ -262,6 +275,8 @@ onMounted(() => run(async () => {
 </template>
 
 <style scoped>
+.document-preview { max-height: 24rem; overflow: auto; margin-top: 12px; padding: 8px; border: 1px solid var(--line); }
+.document-preview summary { cursor: pointer; }
 .head { margin-bottom: 16px; }
 .panel { margin: 16px 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 h2 { margin: 0 0 12px; font-size: 16px; }

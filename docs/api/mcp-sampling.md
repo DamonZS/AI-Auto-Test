@@ -2,10 +2,12 @@
 
 依据项目 `Agents.md` 第 7–10 节及 Sampling 进度记录。本轮使用现有 `POST /mcp`、租户认证、用例审核、修订历史与执行队列。协议版本为 `2025-06-18`。
 
+令牌与 Streamable HTTP 客户端配置见 [MCP 客户端接入](mcp.md)。Sampling 由客户端声明和处理。
+
 ## HTTP 流程
 
 1. 客户端用 `initialize` 声明 `params.capabilities.sampling: {}`，保存响应头 `Mcp-Session-Id`，随后发送 `notifications/initialized`。后续请求携带相同认证、会话头及 `MCP-Protocol-Version: 2025-06-18`。
-2. 客户端以 `tools/call` 调用 `generate_test_cases_from_code`，请求头 `Accept` 包含 `application/json, text/event-stream`。提交 `project_id`、`language`、`code`、`requirements` 和 `test_types`。`code` 上限为 256 KiB。`project_id`、`language`、`requirements` 上限分别为 128、64、4096 字节。`test_types` 支持 `api`、`ui` 和涵盖两者的 `functional`。
+2. 客户端以 `tools/call` 调用 `generate_test_cases_from_code`，请求头 `Accept` 包含 `application/json, text/event-stream`。提交 `project_id`、`language`、`code`、`requirements` 和 `test_types`。`code` 上限为 256 KiB。`project_id`、`language`、`requirements` 上限分别为 128、64、4096 字节。`test_types` 支持 `api`、`ui` 和涵盖两者的 `functional`。只提交该项目生成普通功能用例所需的源码，并在客户端确认是否允许发给所用模型。
 3. 原 POST 返回 `text/event-stream`，首个事件为 `sampling/createMessage`，包含一次源码上下文及唯一 JSON-RPC ID。客户端通过另一条 POST 提交同 ID 的 `result`（`role: "assistant"`、`content: {"type":"text","text":"…"}`）或 JSON-RPC `error`。匹配的回包获得 `202` 和空响应体。错配的会话返回 `404`，错配或重复的消息 ID 返回 `400`。
 4. 原 SSE 随后返回与原 `tools/call` ID 对应的最终结果并关闭。成功时 `structuredContent` 给出 `generated: true`、`status: "needs_review"`、`project_id` 和 `draft.cases`（用例 ID、名称、类型和草稿状态）。模型拒绝、超时或无效输出时返回 `isError: true`。
 
@@ -28,6 +30,6 @@
 
 ## 主控接入
 
-- 将现有 `POST /mcp` 挂载在专门的 MCP scope，并继续把经过认证的租户传给 `mcpEndpoint`。更换凭据后重新初始化会话。Go HTTP 调用测试使用基线的设备令牌鉴权。
-- Web 的执行按钮已要求 `approved`。基线的 Web run HTTP handler 本身仍允许直接入队。统一门禁时，需在该 handler 也使用 Sampling 审批条件。
+- `POST /mcp` 使用 `mcp` scope 令牌。服务端按令牌确定租户，更换凭据后重新初始化会话。
+- Web 和 MCP 执行入口均检查 Sampling 用例状态，只有 `approved` 的 Sampling 用例可入队。
 - 浏览器发送 `Origin` 时，其主机必须匹配 `Host`，否则返回 `403`。反代需校验公开主机名，透传 `Host`、`Mcp-Session-Id`、`MCP-Protocol-Version` 并流式转发 SSE。多实例部署需要同一会话的初始化、工具调用与回包命中同一进程。

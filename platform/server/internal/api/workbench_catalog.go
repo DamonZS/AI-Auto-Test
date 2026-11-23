@@ -90,6 +90,7 @@ func findWorkbenchTemplate(kind string) *workbenchTemplate {
 type workbenchCheck struct {
 	Result   string `json:"result"`
 	Evidence string `json:"evidence"`
+	Guidance string `json:"guidance,omitempty"`
 }
 
 type workbenchContent struct {
@@ -131,6 +132,7 @@ func (content *workbenchContent) validate(tmpl *workbenchTemplate) error {
 			return fmt.Errorf("检查项 %q 的结果无效", key)
 		}
 		check.Evidence = strings.TrimSpace(check.Evidence)
+		check.Guidance = strings.TrimSpace(check.Guidance)
 	}
 	return nil
 }

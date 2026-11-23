@@ -17,6 +17,7 @@ func (s *Server) registerWorkbench(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("GET /api/workbench/documents", s.tenant(s.listWorkbenchDocuments))
 	mux.HandleFunc("POST /api/workbench/documents", s.tenant(s.createWorkbenchDocument))
+	mux.HandleFunc("POST /api/workbench/documents/generate", s.tenant(s.generateWorkbenchDocument))
 	mux.HandleFunc("GET /api/workbench/documents/{id}", s.tenant(s.getWorkbenchDocument))
 	mux.HandleFunc("PATCH /api/workbench/documents/{id}", s.tenant(s.editWorkbenchDocument))
 	mux.HandleFunc("POST /api/workbench/documents/{id}/review", s.tenant(s.reviewWorkbenchDocument))
@@ -109,13 +110,17 @@ func (s *Server) createWorkbenchDocument(w http.ResponseWriter, r *http.Request,
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.insertWorkbenchDraft(w, r, tenantID, body.ProjectID, body.VersionID, body.Kind, body.workbenchContent)
+}
+
+func (s *Server) insertWorkbenchDraft(w http.ResponseWriter, r *http.Request, tenantID, projectID, versionID, kind string, content workbenchContent) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	doc, err := scanWorkbenchDocument(s.st.DB.QueryRowContext(r.Context(), `INSERT INTO workbench_documents
 		(id, tenant_id, project_id, version_id, kind, content, created_at, updated_at)
 		SELECT ?, project.tenant_id, project.id, version.id, ?, ?, ?, ? FROM versions version
 		JOIN projects project ON project.id = version.project_id AND project.tenant_id = version.tenant_id
 		WHERE project.tenant_id = ? AND project.id = ? AND version.id = ? RETURNING `+workbenchColumns,
-		id(), body.Kind, mustJSON(body.workbenchContent), now, now, tenantID, body.ProjectID, body.VersionID))
+		id(), kind, mustJSON(content), now, now, tenantID, projectID, versionID))
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		fail(w, http.StatusNotFound, "项目或版本不存在")

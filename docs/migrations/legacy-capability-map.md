@@ -23,7 +23,7 @@
 | 页面 readiness | `lib/readiness.mjs` | `auto_ai/readiness.py`、`auto_ai/browser.py` | Playwright 导航后等待控件稳定，到达等待上限后返回快照。frame/shadow DOM 待迁移 |
 | 行上下文和 Form 适配 | `dom.mjs`, `form.mjs` | — | 未迁移；基础页面快照和 `wait_text` 不是 Form 等价实现 |
 | 浏览器网络/页面诊断与脱敏 | `lib/diagnostics.mjs` | `auto_ai/browser_diagnostics.py`、`agents/ui_runner.py` | 接入受控回放和失败报告，真实 Chromium 夹具验证请求失败、HTTP 错误与页面异常 |
-| Excel 用例导入导出及回放校验 | `lib/workflow_excel.py`, `lib/workflow.mjs` | `agents/case_workbook.py`、`scripts/case_cli.py` | 支持平台结构化 UI 工作簿，核对隐藏回放摘要和可见步骤顺序。旧 17 列格式和 UI 导入待迁移 |
+| Excel 用例导入导出及回放校验 | `lib/workflow_excel.py`, `lib/workflow.mjs` | `agents/case_workbook.py`、`scripts/case_cli.py`、`packaging/desktop_workbook.py` | 校验结构化 UI 的隐藏回放摘要和可见步骤顺序，桌面桥接另支持旧版自然语言表。接入与格式范围见 [桌面工作簿](case-workbooks.md) |
 | Laya HTTP 候选决策协议 | `lib/model.mjs`, `worker.py` | `agents/laya_decision_provider.py`, `agents/ui_runner.py` | 核心 API 协议已迁移；逐次概率、margin、缓存和推理轨迹尚未完整持久化 |
 | Node CLI、演示服务、样例页面/模型权重 | `runner.mjs`, `run-demo-server.sh`, `examples/` | — | 本地演示和 Node 运行壳不迁移 |
 

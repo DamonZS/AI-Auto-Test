@@ -30,8 +30,13 @@ def worker_token(data):
     configured = os.environ.get("PLATFORM_WORKER_TOKEN", "").strip()
     if configured:
         return configured
-    token_file = data / "worker-token.txt"
-    return token_file.read_text(encoding="utf-8-sig").strip() if token_file.is_file() else ""
+    for name in ("worker-token.txt", "desktop-worker-token.txt"):
+        token_file = data / name
+        if token_file.is_file():
+            token = token_file.read_text(encoding="utf-8-sig").strip()
+            if token:
+                return token
+    return ""
 
 
 def wait_for_control(control, stop_file, server):
@@ -64,8 +69,11 @@ def serve(args, stop_file, log):
     options = {"cwd": args.data_dir, "env": env, "stdout": log, "stderr": log,
                "creationflags": subprocess.CREATE_NO_WINDOW if WINDOWS else 0}
     binary = PAYLOAD / ("autotest-server.exe" if WINDOWS else "autotest-server")
-    control = subprocess.Popen([binary, "-addr", f"127.0.0.1:{args.port}", "-db",
-                                "platform.db", "-web", PAYLOAD / "web", "-desktop-setup"], **options)
+    control_args = [binary, "-addr", f"127.0.0.1:{args.port}", "-db",
+                    "platform.db", "-web", PAYLOAD / "web", "-desktop-setup"]
+    if not os.environ.get("PLATFORM_WORKER_TOKEN", "").strip():
+        control_args.extend(["-desktop-worker-dir", args.data_dir])
+    control = subprocess.Popen(control_args, **options)
     worker = None
     try:
         if not wait_for_control(control, stop_file, server):

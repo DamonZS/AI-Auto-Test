@@ -30,12 +30,13 @@ payload="$scratch/Auto-Test.app/Contents/Resources"
 env -u PLATFORM_AUTH_USERNAME -u PLATFORM_AUTH_PASSWORD -u PLATFORM_WORKER_TOKEN \
     "$launcher" --data-dir "$data" --port "$port" --no-browser &
 desktop_pid=$!
-fixture="$("$payload/python/bin/python3" deploy/smoke.py "$server" prepare --desktop-payload "$payload" --worker-token-file "$data/worker-token.txt")"
+fixture="$("$payload/python/bin/python3" deploy/smoke.py "$server" prepare --desktop-payload "$payload")"
 tenant="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tenant"])' <<< "$fixture")"
 run="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["run"])' <<< "$fixture")"
 python3 deploy/smoke.py "$server" check "$tenant" "$run" || { cat "$data/desktop.log"; exit 1; }
 test -f "$data/platform.db"
 test -f "$data/platform.db.key"
+test -f "$data/desktop-worker-token.txt"
 "$launcher" --stop --data-dir "$data"
 wait "$desktop_pid"
 unset desktop_pid

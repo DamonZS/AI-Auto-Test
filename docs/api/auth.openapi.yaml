@@ -142,11 +142,21 @@ paths:
         '500': { $ref: '#/components/responses/InternalError' }
   /api/agent/settings:
     get:
-      description: Worker-only runtime settings for the tenant bound to the credential. The existing settings response may include the model API key. Cache-Control is no-store.
+      description: Worker-only runtime settings for the tenant bound to the credential. The response may include the model API key. Cache-Control is no-store.
       security: [{ ServiceBearer: [] }, { ServiceHeader: [] }]
       x-required-scope: worker
       responses:
-        '200': { description: Worker settings. }
+        '200':
+          description: Worker settings, including the optional tenant browser preference.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  playwright_browser:
+                    type: string
+                    enum: ['', chromium, firefox, webkit, chrome, msedge]
+                    description: An empty value inherits the worker default.
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '500': { $ref: '#/components/responses/InternalError' }

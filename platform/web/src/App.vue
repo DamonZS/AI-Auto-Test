@@ -15,6 +15,7 @@ import BugsView from './views/BugsView.vue'
 import PatchesView from './views/PatchesView.vue'
 import TestDataView from './views/TestDataView.vue'
 import SettingsView from './views/SettingsView.vue'
+import McpView from './views/McpView.vue'
 
 const NAV = [
   { key: 'overview', label: '概览', comp: OverviewView },
@@ -29,6 +30,7 @@ const NAV = [
   { key: 'runs', label: '执行记录', comp: RunsView },
   { key: 'bugs', label: '缺陷', comp: BugsView },
   { key: 'patches', label: '自愈审批', comp: PatchesView },
+  { key: 'mcp', label: 'MCP 接入', comp: McpView },
   { key: 'settings', label: '设置', comp: SettingsView },
 ]
 

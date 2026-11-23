@@ -4,6 +4,9 @@ import { api } from '../api'
 import DataTable from '../components/DataTable.vue'
 import StatusTag from '../components/StatusTag.vue'
 import CaseGenerationPanel from '../components/CaseGenerationPanel.vue'
+import CaseWorkbookExport from '../components/CaseWorkbookExport.vue'
+import CaseWorkbookImport from '../components/CaseWorkbookImport.vue'
+import HttpScenarioFields from '../components/HttpScenarioFields.vue'
 
 const props = defineProps({ generationTarget: { type: Object, default: null } })
 const emit = defineEmits(['open-run'])
@@ -21,8 +24,11 @@ const generationTarget = ref(props.generationTarget)
 const statusFilter = ref('')
 const form = ref({ name: '', type: 'ui', scenario: '', requirement_id: '', environment_id: '', expected_source: 'requirement', dataset_id: '', data_row_id: '' })
 const error = ref('')
+const importedTarget = ref('')
 const runSubmitting = ref('')
 const editing = ref(null)
+const caseHistory = ref([])
+const historyError = ref('')
 const structured = ref(false)
 const steps = ref([])
 const scheduleEditing = ref(null)
@@ -99,15 +105,34 @@ async function importScenario(event) {
     if (!Array.isArray(scenario?.steps) || !scenario.steps.length || scenario.steps.some((step) => typeof step?.action !== 'string')) {
       throw new Error('文件必须包含结构化 UI 步骤')
     }
-    form.value.type = 'ui'
-    form.value.name ||= file.name.replace(/\.json$/i, '')
-    structured.value = true
-    steps.value = scenario.steps
+    importWorkbook({ name: file.name.replace(/\.json$/i, ''), scenario })
   } catch (problem) {
     error.value = problem.message
   } finally {
     event.target.value = ''
   }
+}
+
+function importWorkbook({ name, scenario }) {
+  error.value = ''
+  importedTarget.value = ''
+  form.value.type = 'ui'
+  form.value.name ||= name
+  structured.value = true
+  steps.value = scenario.steps
+}
+
+function importLegacyWorkbook({ name, scenario, url }) {
+  error.value = ''
+  form.value.type = 'ui'
+  form.value.name = name
+  form.value.scenario = scenario
+  structured.value = false
+  steps.value = []
+  importedTarget.value = url
+  form.value.environment_id = environments.value.find((environment) =>
+    environment.project_id === projectId.value && environment.base_url === url,
+  )?.id || ''
 }
 
 async function add() {
@@ -118,10 +143,16 @@ async function add() {
     await api.post('/api/cases', { ...form.value, scenario, project_id: projectId.value })
     form.value = { name: '', type: 'ui', scenario: '', requirement_id: '', environment_id: '', expected_source: 'requirement', dataset_id: '', data_row_id: '' }
     dataRecords.value = []
+    importedTarget.value = ''
     structured.value = false
     steps.value = []
     await load()
   } catch (e) { error.value = e.message }
+}
+
+function changeCaseType() {
+  form.value.scenario = ''
+  importedTarget.value = ''
 }
 
 function toggleStructured(target) {
@@ -221,8 +252,20 @@ async function deleteSchedule() {
 }
 
 function openEdit(row) {
+  caseHistory.value = []
+  historyError.value = ''
   editing.value = { ...row, structured: false, steps: [] }
   if (isStructuredUI(row)) toggleStructured('edit')
+}
+
+async function loadHistory() {
+  const caseId = editing.value.id
+  try {
+    const history = await api.get(`/api/cases/${caseId}/history`)
+    if (editing.value?.id === caseId) caseHistory.value = history.slice().reverse()
+  } catch (problem) {
+    if (editing.value?.id === caseId) historyError.value = problem.message
+  }
 }
 
 function isStructuredUI(row) {
@@ -235,6 +278,7 @@ onMounted(load)
 
 <template>
   <header class="head">
+    <form aria-label="新建用例" @submit.prevent="add">
     <div class="form">
       <select v-model="projectId" @change="changeProject">
         <option value="">全部项目</option>
@@ -247,15 +291,16 @@ onMounted(load)
         <option value="in_review">待审核</option>
         <option value="approved">已定稿</option>
       </select>
-      <input v-model="form.name" placeholder="用例名" class="name" />
-      <select v-model="form.type">
+      <input v-model.trim="form.name" aria-label="用例名" placeholder="用例名" class="name" required />
+      <select v-model="form.type" aria-label="用例类型" @change="changeCaseType">
         <option value="ui">UI</option>
         <option value="api">接口</option>
         <option value="perf">性能</option>
       </select>
-      <input v-if="!structured || form.type !== 'ui'" v-model="form.scenario" aria-label="场景描述" placeholder="场景描述" class="scenario" />
+      <input v-if="!structured && form.type === 'ui'" v-model="form.scenario" aria-label="场景描述" placeholder="场景描述" class="scenario" />
       <button v-if="form.type === 'ui'" type="button" @click="toggleStructured('new')">{{ structured ? '自然语言场景' : '结构化步骤' }}</button>
       <label v-if="form.type === 'ui'">导入录制脚本<input type="file" name="scenario-file" accept=".json,application/json" @change="importScenario" /></label>
+      <CaseWorkbookImport v-if="form.type === 'ui'" @imported="importWorkbook" @legacy-imported="importLegacyWorkbook" />
       <select v-model="form.requirement_id" title="关联需求">
         <option value="">无关联需求</option>
         <option v-for="r in requirements.filter((item) => item.project_id === projectId)" :key="r.id" :value="r.id">{{ r.code || r.title }}</option>
@@ -269,11 +314,13 @@ onMounted(load)
         <option v-for="dataset in projectDatasets" :key="dataset.id" :value="dataset.id">{{ dataset.name }}</option>
       </select>
       <select v-if="form.dataset_id" v-model="form.data_row_id" aria-label="绑定数据行">
-        <option value="">运行时选择数据行</option>
+        <option value="">请选择数据行</option>
         <option v-for="record in dataRecords" :key="record.id" :value="record.id">第 {{ record.row_no }} 行</option>
       </select>
-      <button class="primary" @click="add">新增</button>
+      <button class="primary" type="submit" :disabled="!projectId || (form.dataset_id && !form.data_row_id)">新增</button>
     </div>
+    <p v-if="importedTarget" class="hint" role="status">原工作簿地址 {{ importedTarget }}。请核对执行环境。</p>
+    <HttpScenarioFields v-if="form.type !== 'ui'" :key="form.type" v-model="form.scenario" :type="form.type" />
     <section v-if="structured && form.type === 'ui'" class="step-editor" aria-label="新用例步骤">
       <p v-if="selectedDataFields.length" class="muted">可用数据字段 {{ selectedDataFields.map((field) => field.name).join('、') }}</p>
       <div v-for="(step, index) in steps" :key="index" class="step-row">
@@ -300,10 +347,12 @@ onMounted(load)
           <label>URL<input v-model="step.expected" :name="`new-step-${index}-url`" required /></label>
           <label>匹配方式<select v-model="step.match" :name="`new-step-${index}-match`"><option value="contains">包含</option><option value="equals">完全一致</option></select></label>
         </template>
+        <label><input v-model="step.screenshot" type="checkbox" />执行后截图</label>
         <button type="button" @click="removeStep(index)">移除</button>
       </div>
       <button type="button" @click="addStep(steps)">添加步骤</button>
     </section>
+    </form>
     <p class="hint">草稿 → 待审核 → 已定稿；只有已定稿才用于正式回归</p>
     <label v-if="projectId">执行版本
       <select v-model="runVersion" name="run-version">
@@ -338,6 +387,7 @@ onMounted(load)
         <button v-if="row.status === 'approved'" :disabled="!!runSubmitting" @click="run(row)">{{ isStructuredUI(row) ? '回放' : '执行' }}</button>
         <button v-if="row.status === 'approved'" @click="openSchedule(row)">计划</button>
         <button @click="openEdit(row)">查看</button>
+        <CaseWorkbookExport v-if="isStructuredUI(row)" :name="row.name" :scenario="row.scenario" />
       </div>
     </template>
   </DataTable>
@@ -355,7 +405,8 @@ onMounted(load)
       <label v-if="editing.type === 'ui'" class="scenario-mode">场景格式
         <select :value="editing.structured" @change="setEditScenarioMode"><option :value="false">自然语言</option><option :value="true">结构化步骤</option></select>
       </label>
-      <textarea v-if="!editing.structured" v-model="editing.scenario" name="scenario" aria-label="场景描述" required rows="7" />
+      <HttpScenarioFields v-if="editing.type !== 'ui'" v-model="editing.scenario" :type="editing.type" :readonly="editing.status !== 'draft'" />
+      <textarea v-else-if="!editing.structured" v-model="editing.scenario" name="scenario" aria-label="场景描述" required rows="7" />
       <section v-else class="step-editor" aria-label="编辑用例步骤">
         <div v-for="(step, index) in editing.steps" :key="index" class="step-row">
           <label>动作
@@ -381,10 +432,19 @@ onMounted(load)
             <label>URL<input v-model="step.expected" :name="`edit-step-${index}-url`" required /></label>
             <label>匹配方式<select v-model="step.match" :name="`edit-step-${index}-match`"><option value="contains">包含</option><option value="equals">完全一致</option></select></label>
           </template>
+          <label><input v-model="step.screenshot" type="checkbox" :disabled="editing.status !== 'draft'" />执行后截图</label>
           <button v-if="editing.status === 'draft'" type="button" @click="editing.steps.splice(index, 1)">移除</button>
         </div>
         <button v-if="editing.status === 'draft'" type="button" @click="addStep(editing.steps)">添加步骤</button>
       </section>
+      <details @toggle="($event) => $event.target.open && loadHistory()">
+        <summary>用例修订历史</summary>
+        <p v-if="historyError" role="alert" class="error">{{ historyError }}</p>
+        <details v-for="revision in caseHistory" :key="revision.version_no">
+          <summary>v{{ revision.version_no }} · {{ revision.created_at }}</summary>
+          <pre class="revision-content">{{ revision.scenario }}</pre>
+        </details>
+      </details>
       <div class="schedule-actions"><button type="button" @click="editing = null">关闭</button><button v-if="editing.status === 'draft'" class="primary" type="submit">保存场景</button></div>
     </form>
   </div>
@@ -434,6 +494,7 @@ select, input { font: inherit; padding: 7px 10px; border: 1px solid var(--line);
 .actions button { padding: 3px 9px; font-size: 12px; }
 .mono { font-family: ui-monospace, monospace; font-size: 12px; }
 .muted { color: var(--muted); }
+.revision-content { white-space: pre-wrap; overflow-wrap: anywhere; }
 .error { color: var(--bad); }
 .schedule-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; font-size: 13px; }
 .schedule-field > span { color: var(--muted); }

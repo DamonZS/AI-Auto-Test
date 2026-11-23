@@ -12,14 +12,16 @@ import (
 )
 
 type Server struct {
-	st           *store.Store
-	legacyAuth   bool
-	desktopSetup bool
+	st               *store.Store
+	legacyAuth       bool
+	desktopSetup     bool
+	desktopWorkerDir string
 }
 
 type AuthOptions struct {
-	InsecureDevAuth bool
-	DesktopSetup    bool
+	InsecureDevAuth  bool
+	DesktopSetup     bool
+	DesktopWorkerDir string
 }
 
 func New(st *store.Store, options ...AuthOptions) *Server {
@@ -27,13 +29,14 @@ func New(st *store.Store, options ...AuthOptions) *Server {
 	if len(options) != 0 {
 		auth = options[0]
 	}
-	return &Server{st: st, legacyAuth: auth.InsecureDevAuth, desktopSetup: auth.DesktopSetup}
+	return &Server{st: st, legacyAuth: auth.InsecureDevAuth, desktopSetup: auth.DesktopSetup, desktopWorkerDir: auth.DesktopWorkerDir}
 }
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+desktopSetupPath, s.desktopSetupStatus)
 	mux.HandleFunc("POST "+desktopSetupPath, s.registerDesktopOwner)
+	s.registerDesktopWorkerRoutes(mux)
 	mux.HandleFunc("POST /api/auth/login", s.login)
 	mux.HandleFunc("POST /api/auth/logout", s.webSession(s.logout))
 	mux.HandleFunc("GET /api/auth/service-tokens", s.member(s.listServiceTokens, true))
@@ -84,6 +87,7 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /api/runs", s.tenant(s.listRuns))
 	mux.HandleFunc("GET /api/runs/{id}", s.tenant(s.getRun))
+	mux.HandleFunc("GET /api/runs/{id}/report", s.tenant(s.exportRunReport))
 	mux.HandleFunc("POST /api/cases/{id}/run", s.tenant(s.runCase))
 	mux.HandleFunc("GET /api/cases/{id}/schedule", s.tenant(s.getCaseSchedule))
 	mux.HandleFunc("PUT /api/cases/{id}/schedule", s.tenant(s.putCaseSchedule))
@@ -95,6 +99,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/bugs", s.tenant(s.listBugs))
 	mux.HandleFunc("POST /api/bugs", s.tenant(s.createBug))
 	mux.HandleFunc("POST /api/bugs/{id}/transition", s.tenant(s.transitionBug))
+	mux.HandleFunc("POST /api/bugs/{id}/retest", s.tenant(s.retestBug))
 
 	mux.HandleFunc("GET /api/patches", s.tenant(s.listPatches))
 	mux.HandleFunc("POST /api/patches/{id}/decide", s.owner(s.decidePatch))
@@ -107,7 +112,7 @@ func (s *Server) Routes() http.Handler {
 
 func cors(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == desktopSetupPath {
+		if r.URL.Path == desktopSetupPath || r.URL.Path == desktopWorkerPath {
 			w.Header().Set("Cache-Control", "no-store")
 			h.ServeHTTP(w, r)
 			return

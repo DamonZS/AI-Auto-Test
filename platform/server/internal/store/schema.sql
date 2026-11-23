@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS tenant_settings (
   max_steps INTEGER NOT NULL DEFAULT 40,
   max_tokens INTEGER NOT NULL DEFAULT 20000,
   max_duration_seconds INTEGER NOT NULL DEFAULT 600,
+  playwright_browser TEXT NOT NULL DEFAULT '',
   ego_enabled INTEGER NOT NULL DEFAULT 0,
   laya_enabled INTEGER NOT NULL DEFAULT 0,
   jev_enabled INTEGER NOT NULL DEFAULT 0,

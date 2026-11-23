@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { api } from '../api'
 import DataTable from '../components/DataTable.vue'
 import StatusTag from '../components/StatusTag.vue'
@@ -8,6 +8,8 @@ const props = defineProps({ selectedRun: { type: String, default: '' } })
 const rows = ref([])
 const detail = ref(null)
 const detailError = ref('')
+const hasScreenshots = computed(() => detail.value?.steps?.some((step) => step.screenshot_jpeg || step.screenshot_error))
+const screenshotErrors = { limit: '已达截图上限', too_large: '截图过大', unavailable: '截图不可用' }
 let selectedRun = null
 let detailTimer
 
@@ -28,7 +30,8 @@ async function refreshDetail(runId) {
     const result = await api.get(`/api/runs/${runId}`)
     if (selectedRun !== runId) return
     detail.value = result
-    rows.value = rows.value.map((row) => row.id === runId ? result : row)
+    const { steps, ...summary } = result
+    rows.value = rows.value.map((row) => row.id === runId ? summary : row)
     if (['queued', 'running'].includes(result.status)) {
       detailTimer = setTimeout(() => refreshDetail(runId), 1500)
     }
@@ -41,6 +44,19 @@ function closeDetail() {
   clearTimeout(detailTimer)
   selectedRun = null
   detail.value = null
+}
+
+async function downloadReport() {
+  const runId = detail.value.id
+  detailError.value = ''
+  try {
+    const url = URL.createObjectURL(await api.download(`/api/runs/${runId}/report`))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `Auto-Test-${runId}.html`
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (problem) { detailError.value = problem.message }
 }
 
 function ms(v) {
@@ -93,22 +109,41 @@ onUnmounted(closeDetail)
         <dt>Token</dt><dd>{{ detail.token_in }} / {{ detail.token_out }}</dd>
         <dt>需复核</dt><dd>{{ detail.needs_review ? '是' : '否' }}</dd>
       </dl>
+      <template v-if="detail.performance">
+        <h4>性能指标</h4>
+        <dl>
+          <dt>请求数</dt><dd>{{ detail.performance.requests }}</dd>
+          <dt>失败数</dt><dd>{{ detail.performance.failed_requests }}</dd>
+          <dt>错误率</dt><dd>{{ (detail.performance.error_rate * 100).toFixed(2) }}%</dd>
+          <dt>吞吐量</dt><dd>{{ detail.performance.rps }} 请求/秒</dd>
+          <dt>P50 / P95 / P99</dt><dd>{{ ms(detail.performance.p50_ms) }} / {{ ms(detail.performance.p95_ms) }} / {{ ms(detail.performance.p99_ms) }}</dd>
+        </dl>
+      </template>
       <h4>报告</h4>
       <pre>{{ detail.report || '暂无报告' }}</pre>
       <p v-if="detailError" role="alert">{{ detailError }}</p>
       <div v-if="detail.steps?.length" class="step-table" role="region" aria-label="执行步骤" tabindex="0">
         <table>
           <caption>执行步骤</caption>
-          <thead><tr><th scope="col">序号</th><th scope="col">动作</th><th scope="col">状态</th><th scope="col">耗时</th></tr></thead>
+          <thead><tr><th scope="col">序号</th><th scope="col">动作</th><th scope="col">状态</th><th scope="col">耗时</th><th v-if="hasScreenshots" scope="col">截图</th></tr></thead>
           <tbody>
             <tr v-for="step in detail.steps" :key="step.step">
               <th scope="row">{{ step.step }}</th><td>{{ step.action }}</td>
               <td><StatusTag :value="step.status" /></td><td>{{ ms(step.duration_ms) }}</td>
+              <td v-if="hasScreenshots">
+                <details v-if="step.screenshot_jpeg">
+                  <summary>查看截图</summary>
+                  <img class="step-screenshot" :src="`data:image/jpeg;base64,${step.screenshot_jpeg}`"
+                    :alt="`第 ${step.step} 步执行后的页面`" loading="lazy" />
+                </details>
+                <span v-else>{{ screenshotErrors[step.screenshot_error] || '—' }}</span>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
-      <button @click="closeDetail">关闭</button>
+      <button type="button" @click="downloadReport">下载 HTML 报告</button>
+      <button type="button" @click="closeDetail">关闭</button>
     </div>
   </div>
 </template>
@@ -127,4 +162,5 @@ pre { background: #f7f7f9; border: 1px solid var(--line); border-radius: 8px; pa
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 caption { text-align: start; color: var(--muted); margin-bottom: 8px; }
 th, td { text-align: start; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+.step-screenshot { display: block; max-inline-size: min(55vw, 240px); block-size: auto; margin-block-start: 6px; }
 </style>

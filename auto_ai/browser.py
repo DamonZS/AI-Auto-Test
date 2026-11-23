@@ -4,6 +4,7 @@ import asyncio
 import os
 from pathlib import Path
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Optional
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
@@ -112,6 +113,7 @@ class APITracker:
 
 
 _api_tracker = APITracker()
+worker_browser: ContextVar[str] = ContextVar("worker_browser", default="")
 
 
 class BrowserSession:
@@ -128,7 +130,7 @@ class BrowserSession:
 
     async def start(self):
         """启动浏览器"""
-        browser_name = os.environ.get("PLATFORM_BROWSER", "chromium").strip().lower()
+        browser_name = worker_browser.get() or os.environ.get("PLATFORM_BROWSER", "chromium").strip().lower()
         if browser_name not in {"chromium", "firefox", "webkit", "chrome", "msedge"}:
             raise ValueError(f"不支持的 Playwright 浏览器：{browser_name}")
         self._playwright = await async_playwright().start()

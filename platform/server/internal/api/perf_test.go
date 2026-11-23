@@ -42,7 +42,7 @@ func TestPerfCaseRunsThroughQueueAndFinishHandlers(t *testing.T) {
 		t.Fatalf("worker received unexpected scenario: %#v", scenario)
 	}
 
-	result := []byte(`{"status":"passed","passed":true,"needs_review":false,"duration_ms":1250,"report":"完成 10 个请求，失败 0 个。P95 12.5ms","fallback_reason":"Laya 请求失败：DecisionProviderError"}`)
+	result := []byte(`{"status":"passed","passed":true,"needs_review":false,"duration_ms":1250,"report":"完成 10 个请求，失败 0 个。P95 12.5ms","fallback_reason":"Laya 请求失败：DecisionProviderError","requests":10,"failed_requests":0,"error_rate":0,"rps":8,"p50_ms":4,"p95_ms":12.5,"p99_ms":13}`)
 	response = serveAgent(s, "/api/runs/"+runID+"/finish", "tenant-a", result)
 	if response.Code != http.StatusOK {
 		t.Fatalf("finish status = %d, body = %s", response.Code, response.Body.String())
@@ -57,6 +57,10 @@ func TestPerfCaseRunsThroughQueueAndFinishHandlers(t *testing.T) {
 	}
 	if finished["status"] != "passed" || finished["report"] != "完成 10 个请求，失败 0 个。P95 12.5ms" || finished["fallback_reason"] != "Laya 请求失败：DecisionProviderError" {
 		t.Fatalf("unexpected finished run: %#v", finished)
+	}
+	metrics, ok := finished["performance"].(map[string]any)
+	if !ok || metrics["requests"] != 10.0 || metrics["p95_ms"] != 12.5 || metrics["rps"] != 8.0 {
+		t.Fatalf("unexpected stored performance metrics: %#v", metrics)
 	}
 }
 

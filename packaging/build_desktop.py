@@ -55,7 +55,7 @@ def stage(payload, scratch, windows):
 
     site = payload / "site"
     run(sys.executable, "-m", "pip", "install", "--only-binary=:all:", "--no-compile", "--target", site,
-        "-r", ROOT / "deploy/worker-requirements.txt", f"PySide6=={PYSIDE_VERSION}")
+        "-r", ROOT / "deploy/worker-requirements.txt", f"PySide6=={PYSIDE_VERSION}", "openpyxl==3.1.5")
     python = payload / ("python/python.exe" if windows else "python/bin/python3")
     run(python, "-m", "playwright", "install", "chromium", env={
         **os.environ, "PYTHONPATH": str(site), "PLAYWRIGHT_BROWSERS_PATH": str(payload / "browsers"),
@@ -65,7 +65,7 @@ def stage(payload, scratch, windows):
         for source in (ROOT / package).glob("*.py"):
             shutil.copy2(source, payload / package / source.name)
     bundle_icon = "app-icon.ico" if windows else "app-icon.icns"
-    for name in ("desktop.py", "desktop_window.py", "desktop_recorder.py", "app-icon.png", bundle_icon):
+    for name in ("desktop.py", "desktop_window.py", "desktop_recorder.py", "desktop_workbook.py", "app-icon.png", bundle_icon):
         shutil.copy2(ROOT / "packaging" / name, payload)
 
 

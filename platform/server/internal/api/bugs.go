@@ -54,12 +54,16 @@ func (s *Server) createBug(w http.ResponseWriter, r *http.Request, tid string) {
 	_ = s.st.DB.QueryRow("SELECT COALESCE(max(rowid),0)+1 FROM bugs WHERE tenant_id = ?", tid).Scan(&seq)
 	bid := id()
 	code := "BUG-" + short(tid) + "-" + itoa(seq)
-	_, err := s.st.DB.Exec(`INSERT INTO bugs
+	result, err := s.st.DB.Exec(`INSERT INTO bugs
 		(id, tenant_id, project_id, bug_code, title, severity, priority, signature, evidence)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
-		bid, tid, b.ProjectID, code, b.Title, b.Severity, b.Priority, b.Signature, b.Evidence)
+		SELECT ?, tenant_id, id, ?, ?, ?, ?, ?, ? FROM projects WHERE id = ? AND tenant_id = ?`,
+		bid, code, b.Title, b.Severity, b.Priority, b.Signature, b.Evidence, b.ProjectID, tid)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if count, _ := result.RowsAffected(); count == 0 {
+		fail(w, http.StatusNotFound, "项目不存在")
 		return
 	}
 	s.captureEvent(tid, bid, "", "new", "user", "手工创建")
@@ -84,6 +88,22 @@ func (s *Server) transitionBug(w http.ResponseWriter, r *http.Request, tid strin
 		fail(w, http.StatusNotFound, "缺陷不存在")
 		return
 	}
+	if b.Severity != "" && b.Severity != "S1" && b.Severity != "S2" && b.Severity != "S3" && b.Severity != "S4" {
+		fail(w, http.StatusBadRequest, "缺陷级别须为 S1 至 S4")
+		return
+	}
+	if actor := authenticatedActor(r); actor != "" {
+		b.Actor = actor
+	}
+	if cur == b.To && b.Severity != "" {
+		if _, err := s.st.DB.Exec("UPDATE bugs SET severity = ?, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?", b.Severity, bid, tid); err != nil {
+			fail(w, http.StatusInternalServerError, "无法更新缺陷级别")
+			return
+		}
+		s.audit(tid, b.Actor, "web", "bug.severity", bid)
+		write(w, http.StatusOK, map[string]string{"id": bid, "status": cur})
+		return
+	}
 	allowed := false
 	for _, next := range bugTransitions[cur] {
 		if next == b.To {
@@ -105,6 +125,25 @@ func (s *Server) transitionBug(w http.ResponseWriter, r *http.Request, tid strin
 	s.captureEvent(tid, bid, cur, b.To, b.Actor, b.Note)
 	s.audit(tid, b.Actor, "web", "bug."+b.To, bid)
 	write(w, http.StatusOK, map[string]string{"id": bid, "status": b.To})
+}
+
+func (s *Server) retestBug(w http.ResponseWriter, r *http.Request, tid string) {
+	bid, runID := r.PathValue("id"), id()
+	result, err := s.st.DB.ExecContext(r.Context(), `INSERT INTO runs (id, tenant_id, case_id, version_id, dataset_id, data_row_id)
+		SELECT ?, r.tenant_id, r.case_id, r.version_id, r.dataset_id, r.data_row_id
+		FROM bugs b JOIN runs r ON r.id = b.run_id AND r.tenant_id = b.tenant_id
+		JOIN cases c ON c.id = r.case_id AND c.tenant_id = r.tenant_id
+		WHERE b.id = ? AND b.tenant_id = ? AND c.status = 'approved'`, runID, bid, tid)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "无法创建复测任务")
+		return
+	}
+	if count, _ := result.RowsAffected(); count == 0 {
+		fail(w, http.StatusConflict, "当前工作区没有可供此缺陷复测的定稿用例")
+		return
+	}
+	s.audit(tid, authenticatedActor(r), "web", "bug.retest", bid)
+	write(w, http.StatusOK, map[string]string{"run_id": runID, "status": "queued"})
 }
 
 func (s *Server) listPatches(w http.ResponseWriter, r *http.Request, tid string) {

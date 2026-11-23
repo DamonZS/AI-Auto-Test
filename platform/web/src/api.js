@@ -15,7 +15,7 @@ async function request(path, options = {}, authenticated = true, responseType = 
   const res = await fetch(path, {
     ...options,
     headers: {
-      'Content-Type': 'application/json',
+      ...(!(options.body instanceof FormData) && { 'Content-Type': 'application/json' }),
       ...(token && { Authorization: `Bearer ${token}` }),
       ...(token && tenantId && { 'X-Tenant-Id': tenantId }),
       ...options.headers,
@@ -58,6 +58,7 @@ export const api = {
   get: (path) => request(path),
   download: (path) => request(path, {}, true, 'blob'),
   post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
+  upload: (path, body) => request(path, { method: 'POST', body }),
   patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) }),
   put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
   delete: (path) => request(path, { method: 'DELETE' }),
