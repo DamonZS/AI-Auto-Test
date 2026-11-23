@@ -3,7 +3,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"testing"
+
+	"platform/server/internal/store"
 )
 
 func TestTenantPlaywrightSettings(t *testing.T) {
@@ -40,4 +43,29 @@ func TestTenantPlaywrightSettings(t *testing.T) {
 	const browserOnly = `{"provider":"openai-compatible","max_steps":40,"max_tokens":100,"max_duration_seconds":10,"playwright_browser":"msedge"`
 	checkBrowser(authRequest(t, handler, "PUT", "/api/settings", "beta", owner, browserOnly+`}`, http.StatusOK).Body.Bytes(), "msedge")
 	authRequest(t, handler, "PUT", "/api/settings", "beta", owner, browserOnly+`,"model":"fixture"}`, http.StatusBadRequest)
+}
+
+func TestTenantPlaywrightSettingsMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.db")
+	legacy, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.DB.Exec(`ALTER TABLE tenant_settings DROP COLUMN playwright_browser;
+		INSERT INTO tenant_settings (tenant_id, model, laya_enabled) VALUES ('alpha', 'retained', 1)`)
+	if closeErr := legacy.Close(); err != nil || closeErr != nil {
+		t.Fatalf("prepare legacy settings: %v, %v", err, closeErr)
+	}
+	upgraded, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	settings, err := New(upgraded).readSettings("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.PlaywrightBrowser != "" || settings.Model != "retained" || settings.LayaEnabled != 1 {
+		t.Fatal("legacy settings or the inherited browser default changed")
+	}
 }

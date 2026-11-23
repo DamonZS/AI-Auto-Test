@@ -37,7 +37,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, tid string)
 		return
 	}
 	hasModel, hasBaseURL := input.Model != "", input.BaseURL != ""
-	if input.Provider == "" || hasModel != hasBaseURL || (!hasModel && input.APIKey != "") {
+	if input.Provider == "" || hasModel != hasBaseURL {
 		fail(w, http.StatusBadRequest, "provider 必填，配置模型时须同时提供 model 和 base_url")
 		return
 	}
@@ -56,6 +56,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, tid string)
 	current, err := s.readSettings(tid)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !hasModel && (input.APIKey != "" || current.APIKeyCiphertext != "") {
+		fail(w, http.StatusBadRequest, "配置 API Key 时必须提供 model 和 base_url")
 		return
 	}
 	if input.PlaywrightBrowser == nil {
