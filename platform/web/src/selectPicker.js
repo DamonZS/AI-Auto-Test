@@ -1,5 +1,10 @@
+let dismissPicker
+
+export function closeSelectPicker() {
+  dismissPicker?.()
+}
+
 export function installSelectPicker() {
-  if (CSS.supports('appearance', 'base-select') && CSS.supports('selector(::picker(select))')) return
   if (!HTMLElement.prototype.showPopover) return
 
   const picker = document.createElement('div')
@@ -13,15 +18,21 @@ export function installSelectPicker() {
   let active = -1
   let search = ''
   let lastSearch = 0
+  const watchAnchor = new MutationObserver(() => {
+    if (select && !select.isConnected) close()
+  })
 
   function close() {
     if (!select) return
+    watchAnchor.disconnect()
     picker.hidePopover()
     select.removeAttribute('aria-expanded')
     select.removeAttribute('aria-controls')
     select.removeAttribute('aria-activedescendant')
     select = null
   }
+
+  dismissPicker = close
 
   function enabled(index) {
     return picker.children[index]?.getAttribute('aria-disabled') === 'false'
@@ -90,6 +101,7 @@ export function installSelectPicker() {
     const container = select.closest('dialog[open]') || document.body
     container.append(picker)
     picker.showPopover()
+    watchAnchor.observe(document.body, { childList: true, subtree: true })
     if (keyboard) {
       if (enabled(select.selectedIndex)) highlight(select.selectedIndex)
       else move(0, 1)
@@ -129,11 +141,28 @@ export function installSelectPicker() {
   }, true)
   document.addEventListener('click', (event) => {
     const trigger = triggerFor(event.target)
-    if (!trigger) return
+    if (!trigger) {
+      if (!picker.contains(event.target)) close()
+      return
+    }
     event.preventDefault()
     if (trigger === select) close()
     else open(trigger)
   }, true)
+  document.addEventListener('pointermove', (event) => {
+    if (!select || event.pointerType !== 'mouse') return
+    const trigger = select.getBoundingClientRect()
+    const menu = picker.getBoundingClientRect()
+    const { clientX, clientY } = event
+    const containsPointer = (bounds) => clientX >= bounds.left && clientX <= bounds.right
+      && clientY >= bounds.top && clientY <= bounds.bottom
+    const inGap = clientX >= Math.max(trigger.left, menu.left) && clientX <= Math.min(trigger.right, menu.right)
+      && clientY >= Math.min(trigger.bottom, menu.bottom) && clientY <= Math.max(trigger.top, menu.top)
+    if (!containsPointer(trigger) && !containsPointer(menu) && !inGap) close()
+  }, true)
+  document.documentElement.addEventListener('pointerleave', (event) => {
+    if (event.pointerType === 'mouse') close()
+  })
   picker.addEventListener('click', (event) => {
     const item = event.target.closest('[data-index]')
     if (item) commit(Number(item.dataset.index))

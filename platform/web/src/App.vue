@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, shallowRef } from 'vue'
 import { api, setSessionExpiredHandler, setTenant } from './api'
+import { closeSelectPicker } from './selectPicker'
 import AppIcon from './components/AppIcon.vue'
 import LoginForm from './components/LoginForm.vue'
 import ProjectJourney from './components/ProjectJourney.vue'
@@ -81,6 +82,7 @@ onMounted(async () => {
 })
 
 function switchTo(key) {
+  closeSelectPicker()
   selectedRun.value = ''
   selectedCase.value = ''
   generationTarget.value = null
